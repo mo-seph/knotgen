@@ -249,7 +249,12 @@ def preview(
     ax.set_ylabel("y (mm)")
     ax.set_zlabel("z (mm)")
     ax.set_title(title or knot.name, y=0.99)
-    fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
+    # reserve a sliver at the bottom for the colour-mode buttons when a strip
+    # is shown — if the 3D axes overlaps them, interactive rotation repaints
+    # the axes over the buttons and they vanish after the first drag
+    fig.subplots_adjust(
+        left=0.0, right=1.0, bottom=0.055 if strips else 0.0, top=1.0
+    )
 
     if save:
         fig.savefig(save, dpi=150, bbox_inches="tight")
