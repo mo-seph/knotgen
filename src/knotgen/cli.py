@@ -153,10 +153,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="shift the first connector this far along each component "
                           "(choose where the joins land; default 0)")
     gen.add_argument("--out", default=None, metavar="FILE",
-                     help="write the JSON export (for the Fusion KnotImport script) here")
+                     help="write the JSON export (for the Fusion KnotImport script); "
+                          "a bare filename goes into output/, move keepers to designs/")
     gen.add_argument("--preview", action="store_true", help="open a 3D preview window")
     gen.add_argument("--save-png", default=None, metavar="FILE",
-                     help="save the preview as a PNG instead of opening a window")
+                     help="save the preview as a PNG instead of opening a window "
+                          "(bare filenames go into output/)")
 
     lst = sub.add_parser(
         "list",
@@ -209,6 +211,19 @@ def build_parser() -> argparse.ArgumentParser:
                           "extreme value hasn't changed the knot type)")
 
     return parser
+
+
+def _resolve_out(path_str: str) -> "Path":
+    """Bare filenames land in output/ (created on demand); explicit paths
+    are respected."""
+    from pathlib import Path
+
+    p = Path(path_str)
+    if str(p.parent) == ".":
+        outdir = Path("output")
+        outdir.mkdir(exist_ok=True)
+        return outdir / p
+    return p
 
 
 def cmd_gen(args: argparse.Namespace) -> int:
@@ -319,12 +334,20 @@ def cmd_gen(args: argparse.Namespace) -> int:
                 )
                 for ci, f in enumerate(strip_frames)
             ]
+        import shlex
+
+        cli_options = {
+            k: v for k, v in vars(args).items()
+            if k not in ("command", "argv") and not k.startswith("_")
+        }
         doc = build_document(
             styled,
             report=report,
             fit_points=args.fit_points,
             tube_diameter=args.tube,
             strips=strip_sections,
+            command="knotgen " + shlex.join(getattr(args, "argv", [])),
+            cli_options=cli_options,
         )
         want_connectors = args.connectors or args.connector_spacing
         if want_connectors and strip_frames is not None:
@@ -350,7 +373,7 @@ def cmd_gen(args: argparse.Namespace) -> int:
         elif want_connectors:
             print("  (--connectors/--connector-spacing need --strip for "
                   "orientation frames; skipped)")
-        out = export_json(args.out, doc)
+        out = export_json(_resolve_out(args.out), doc)
         print(f"  wrote {out}  (fit deviation {doc['checks']['fit_max_deviation_mm']} mm)")
     elif args.out and failed:
         print("  NOT exporting — tube does not fit (see above)")
@@ -363,7 +386,7 @@ def cmd_gen(args: argparse.Namespace) -> int:
             tube_diameter=args.tube,
             strip=strip_frames,
             strip_width=args.strip,
-            save=args.save_png,
+            save=str(_resolve_out(args.save_png)) if args.save_png else None,
             show=args.preview,
             title=f"{styled.name}  {e['x_extent']:.0f}x{e['y_extent']:.0f}x{e['z_extent']:.0f}mm",
         )
@@ -497,6 +520,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+    args.argv = argv  # recorded into exports for reproducibility
     if args.command is None:
         parser.print_help()
         return 0

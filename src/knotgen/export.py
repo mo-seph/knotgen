@@ -179,6 +179,8 @@ def build_document(
     dense_points: int = 400,
     tube_diameter: float | None = None,
     strips: list[dict[str, Any]] | None = None,
+    command: str | None = None,
+    cli_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from knotgen.link import as_link
     from knotgen.nurbs import fit_periodic
@@ -214,6 +216,8 @@ def build_document(
     doc: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "generator": f"knotgen {__version__}",
+        "command": command,
+        "cli_options": cli_options,
         "name": link.name,
         "source": link.meta.get("source", "unknown"),
         "meta": {k: v for k, v in link.meta.items() if k != "style"},

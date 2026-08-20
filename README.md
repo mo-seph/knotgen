@@ -32,6 +32,12 @@ uv run knotgen list --crossings 6 --links
 
 Then in Fusion: **Utilities → Add-Ins → Scripts (Shift+S) → KnotImport** → pick the JSON. You get a new component with the knot as a single closed spline; sweep your profile along it (or accept the offered round-tube Pipe preview first).
 
+## Folders & reproducibility
+
+- `output/` — default landing spot: a bare `--out lamp.json` or `--save-png x.png` goes here. Git-ignored scratch space.
+- `designs/` — move the keepers here; it's tracked in git, so finished lamp designs are versioned.
+- Every export records the exact command that made it (`"command"` field) and all parsed options (`"cli_options"`), so any JSON can be regenerated or tweaked later even if you've forgotten the recipe.
+
 ## Commands
 
 | command | what it does |
