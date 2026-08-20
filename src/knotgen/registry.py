@@ -32,6 +32,7 @@ def resolve(
     braid_fraction: float = 0.8,
     lane_gap: float | None = None,
     braid_split: float = 0.0,
+    wall: bool = False,
 ) -> FourierKnot | FourierLink:
     """Get a curve by name.
 
@@ -51,7 +52,7 @@ def resolve(
 
             return racetrack_weave(
                 p, q, aspect=aspect, braid_fraction=braid_fraction,
-                lane_gap=lane_gap, braid_split=braid_split,
+                lane_gap=lane_gap, braid_split=braid_split, wall=wall,
             )
         return weaving.weaving(p, q, rho=rho)
 

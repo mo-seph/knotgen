@@ -66,6 +66,7 @@ Knot names are Rolfsen (`3_1`, `5_2`, `8_19`, ...), or `"T(p,q)"` for a raw toru
 | `--braid-fraction F` | racetrack: how much of the straight the crossings occupy — small = tight woven patch in the middle, 1 = spread the full straight |
 | `--lane-gap F` | racetrack: lane spacing (fraction of half-width, default auto) — smaller = gentler crossings, less lane clearance |
 | `--braid-split F` | racetrack: move this fraction of the crossings to the other straight (0.5 = woven on both sides). Same knot either way — splitting the cyclic braid word around the closure is an isotopy — and halving the crossing density roughly doubles the bend radius |
+| `--wall` | racetrack: wall-mount mode — under-strands stay flat at lane level, only over-strands arch up, and the whole path is shifted so the flat plane sits at z = 0. The z = 0 plane is the *path centerline*: author your profile accordingly (its back face below the sketch origin by the mounting offset), use `--light-dir up` so LEDs face away from the wall, and pair with `--braid-split 0.5` — one-sided arches climb the full depth in one go, so they're sharper than symmetric crossings |
 | `--tube MM` | intended tube/profile diameter: refuses to export if it won't sweep, enables the Pipe preview in Fusion |
 | `--out FILE` | write the JSON export |
 | `--preview` / `--save-png FILE` | 3D view (curvature-coloured, crossing markers in red) |

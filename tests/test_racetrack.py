@@ -66,6 +66,28 @@ def test_braid_split_component_count_unchanged():
     assert as_link(racetrack_weave(3, 3, braid_split=0.5)).n_components == 3
 
 
+def test_wall_mode():
+    from knotgen.transforms import floor_z
+
+    w = racetrack_weave(3, 5, wall=True)
+    link = as_link(w)
+    assert len(crossings_xy(link)) == 10
+    assert is_alternating(link)
+    # raw construction: nothing meaningfully below the lane plane (the
+    # truncated Fourier series rings by a fraction of a percent)
+    t = np.linspace(0, TAU, 4096, endpoint=False)
+    z = link.components[0].eval(t)[:, 2]
+    assert z.min() > -0.01
+    # most of the curve lies flat on the plane (lanes + under-passages)
+    assert np.mean(np.abs(z) < 1e-2) > 0.5
+
+    # styled + floored: flat plane at z = 0, everything above
+    styled = floor_z(apply_style(w, width=500.0, depth=20.0))
+    zs = styled.eval(t)[:, 2]
+    assert zs.min() == pytest.approx(0.0, abs=1e-6)
+    assert zs.max() == pytest.approx(20.0, abs=0.5)
+
+
 def test_racetrack_validation():
     with pytest.raises(ValueError):
         racetrack_weave(1, 3)

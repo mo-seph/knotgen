@@ -119,6 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help="racetrack layout: fraction of the crossings moved to the "
                           "other straight, 0-1 (0.5 = half on each side; same knot "
                           "either way — splitting the cyclic braid word is an isotopy)")
+    gen.add_argument("--wall", action="store_true",
+                     help="racetrack layout: wall-mount mode — under-strands stay "
+                          "flat at lane level and only over-strands arch up, and the "
+                          "whole knot is shifted so the flat plane sits at z = 0 "
+                          "(lies against a wall)")
     gen.add_argument("--tube", type=float, default=None, metavar="MM",
                      help="intended tube/profile diameter: refuses to export if it would "
                           "self-intersect, and enables the Pipe preview offer in Fusion")
@@ -241,6 +246,7 @@ def cmd_gen(args: argparse.Namespace) -> int:
         braid_fraction=args.braid_fraction,
         lane_gap=args.lane_gap,
         braid_split=args.braid_split,
+        wall=args.wall,
     )
     styled = apply_style(
         knot,
@@ -249,6 +255,10 @@ def cmd_gen(args: argparse.Namespace) -> int:
         depth=args.depth,
         tightness=args.tightness,
     )
+    if args.wall:
+        from knotgen.transforms import floor_z
+
+        styled = floor_z(styled)
 
     from knotgen.link import as_link
 

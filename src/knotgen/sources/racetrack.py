@@ -84,6 +84,7 @@ def racetrack_weave(
     braid_fraction: float = 0.8,
     lane_gap: float | None = None,
     braid_split: float = 0.0,
+    wall: bool = False,
     samples_per_lap: int = 2048,
     n_harmonics: int = 200,
 ) -> FourierKnot | FourierLink:
@@ -97,6 +98,12 @@ def racetrack_weave(
     (0 = all on one side, 0.5 = half and half). Splitting the cyclic braid
     word around the closure is an isotopy, so the knot type is unchanged —
     the alternation check still verifies each result.
+
+    wall: one-sided crossings for wall mounting — the under-strand stays
+    flat at lane level (z = 0) and only the over-strand arches up, so all
+    the plain running and every under-passage lie in one plane against the
+    wall. (Combine with the CLI --wall flag, which also floors the styled
+    design to z >= 0.)
     """
     if p < 2 or q < 1:
         raise ValueError(f"W({p},{q}): need p >= 2 and q >= 1")
@@ -166,7 +173,13 @@ def racetrack_weave(
                 lane[inside] = ct + (other - ct) * _smoothstep(frac[inside])
                 lane[u >= u0 + w] = other
                 over = (sign > 0) == (ct == i)
-                z[inside] += (bump_amp if over else -bump_amp) * _bump(frac[inside])
+                if wall:
+                    # under stays flat on the wall plane; over arches by the
+                    # full separation
+                    if over:
+                        z[inside] += 2.0 * bump_amp * _bump(frac[inside])
+                else:
+                    z[inside] += (bump_amp if over else -bump_amp) * _bump(frac[inside])
                 ct = other
         lap_lane.append(lane)
         lap_z.append(z)
@@ -206,7 +219,7 @@ def racetrack_weave(
                 name=f"W({p},{q})",
                 meta={"source": "weaving-racetrack", "p": p, "q": q,
                       "aspect": aspect, "braid_fraction": braid_fraction,
-                      "braid_split": braid_split},
+                      "braid_split": braid_split, "wall": wall},
             )
         )
 

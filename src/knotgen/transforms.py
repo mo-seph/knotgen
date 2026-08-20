@@ -19,6 +19,32 @@ FLAT_RATIO = 0.30  # natural z/xy above this = a genuinely 3D conformation
 DEFAULT_FLAT_DEPTH = 25.0  # mm, the 2.5D "crossing bump" depth
 
 
+def floor_z(design: FourierKnot | FourierLink) -> FourierKnot | FourierLink:
+    """Translate the design so its lowest point sits at z = 0 (e.g. so a
+    wall-layout knot's flat parts lie on the mounting plane)."""
+    import numpy as np
+
+    from knotgen.fourier import TAU
+
+    link = as_link(design)
+    t = np.linspace(0.0, TAU, 4096, endpoint=False)
+    z_min = min(float(c.eval(t)[:, 2].min()) for c in link.components)
+    comps = []
+    for c in link.components:
+        b = c.b.copy()
+        b[2, 0] -= z_min
+        from dataclasses import replace
+
+        comps.append(replace(c, a=c.a.copy(), b=b))
+    shifted = FourierLink(components=comps, name=link.name, meta=dict(link.meta))
+    if isinstance(design, FourierKnot):
+        out = shifted.components[0]
+        out.name = design.name
+        out.meta = shifted.meta
+        return out
+    return shifted
+
+
 def natural_aspect(knot: FourierKnot | FourierLink) -> float:
     """Natural z-extent / xy-diameter of the unstyled curve."""
     e = as_link(knot).extents()
