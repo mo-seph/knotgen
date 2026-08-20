@@ -1,0 +1,13 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "script",
+    "scriptLanguage": "Python",
+    "description": "Import a knotgen JSON as a continuous 3D knot path (with optional pipe preview)",
+    "sourceWindows": "",
+    "sourceMacOS": "",
+    "iconFilename": "",
+    "version": "0.1.0",
+    "runOnStartup": false,
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}
