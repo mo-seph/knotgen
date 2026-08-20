@@ -324,6 +324,8 @@ def preview(
                 buttons.append(btn)
             fig._knotgen_buttons = buttons  # keep references alive
             help_line += " | strip colours: buttons or [1] curvature, [2] edgewise, [3] sides (blue=LED face, yellow=back)"
+        else:
+            help_line += " | (colour-mode buttons appear when a strip is shown — add --strip W)"
         print(help_line)
         plt.show()
     else:
