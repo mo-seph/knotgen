@@ -145,6 +145,22 @@ def test_connectors_validation(styled):
         build_connectors_section(frames, spacing=-5.0)
 
 
+def test_mounts_section(styled):
+    from knotgen.export import build_mounts_section
+    from knotgen.frames import compute_frames
+
+    frames = [compute_frames(styled)]
+    sec = build_mounts_section(frames, [(0, 250.0), (0, 900.0)])
+    assert sec["count"] == 2
+    assert sec["frames"][0]["s_mm"] == pytest.approx(250.0, abs=0.1)
+    for fr in sec["frames"]:
+        x, y, z = (np.array(fr[k]) for k in ("x_axis", "y_axis", "z_axis"))
+        assert abs(np.dot(x, y)) < 1e-6
+        np.testing.assert_allclose(np.cross(x, y), z, atol=1e-6)
+    with pytest.raises(ValueError, match="no such component"):
+        build_mounts_section(frames, [(3, 100.0)])
+
+
 def test_preflight_gates_oversized_tube(styled):
     report = preflight(styled, tube_diameter=200.0)
     assert report.ok_for_tube is False

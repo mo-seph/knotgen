@@ -171,6 +171,27 @@ def build_connectors_section(
     }
 
 
+def build_mounts_section(strips, specs: list[tuple[int, float]]) -> dict[str, Any]:
+    """Mount frames at explicit arc positions: (component, mm along path).
+
+    Same frame convention as connectors (x = tangent, y = width, z = LED
+    normal); the Fusion script turns each into a Joint Origin so a base can
+    be attached with a single rigid joint — no manual plane construction.
+    """
+    frames = []
+    for ci, s_mm in specs:
+        if not 0 <= ci < len(strips):
+            raise ValueError(f"mount c{ci + 1}: no such component")
+        s = strips[ci]
+        n = len(s.points)
+        u = (s_mm % s.length) / s.length * n
+        fr = _frame_at(s, u)
+        fr["component"] = ci
+        fr["s_mm"] = round(s_mm % s.length, 1)
+        frames.append(fr)
+    return {"count": len(frames), "frames": frames}
+
+
 def build_document(
     design,  # FourierKnot | FourierLink
     *,

@@ -694,6 +694,57 @@ def _add_labels(comp, placed, label_point, prefix, height_cm, depth_cm,
         log.append("labels: none engraved — text sketches may need manual cut")
 
 
+# ------------------------------------------------------------------- mounts
+
+def _add_mounts(comp, mounts, log):
+    """A Joint Origin at each exported mount frame: origin on the path,
+    x = tangent, z = LED face normal. Attach a base with one rigid joint
+    against it — all three rotations come from the frame, and the joint
+    origin's offset/angle parameters stay editable for fine adjustment."""
+    made = 0
+    for i, fr in enumerate(mounts["frames"]):
+        try:
+            origin, tangent, width, led = _frame_vectors(fr)
+            sk = comp.sketches.add(comp.xYConstructionPlane)
+            sk.name = "mount {:02d} frame".format(i + 1)
+            scale = 1.5  # cm; axis carrier lines
+            p0 = sk.sketchPoints.add(origin)
+            ln_x = sk.sketchCurves.sketchLines.addByTwoPoints(
+                adsk.core.Point3D.create(origin.x, origin.y, origin.z),
+                adsk.core.Point3D.create(
+                    origin.x + tangent.x * scale,
+                    origin.y + tangent.y * scale,
+                    origin.z + tangent.z * scale,
+                ),
+            )
+            ln_z = sk.sketchCurves.sketchLines.addByTwoPoints(
+                adsk.core.Point3D.create(origin.x, origin.y, origin.z),
+                adsk.core.Point3D.create(
+                    origin.x + led.x * scale,
+                    origin.y + led.y * scale,
+                    origin.z + led.z * scale,
+                ),
+            )
+            try:
+                geo = adsk.fusion.JointGeometry.createByPoint(p0)
+                jo_input = comp.jointOrigins.createInput(geo)
+                jo_input.xAxisEntity = ln_x
+                jo_input.zAxisEntity = ln_z
+                jo = comp.jointOrigins.add(jo_input)
+                jo.name = "mount {:02d}".format(i + 1)
+                made += 1
+            except Exception as exc:
+                log.append(
+                    "mount {:02d}: joint origin failed ({}) — sketch '{}' "
+                    "carries the frame (point + tangent/normal lines) for a "
+                    "manual joint origin".format(i + 1, exc, sk.name)
+                )
+        except Exception as exc:
+            log.append("mount {:02d} failed: {}".format(i + 1, exc))
+    if made:
+        log.append("mounts: {} joint origin(s) created".format(made))
+
+
 # ------------------------------------------------------------------ command
 
 class _Created(adsk.core.CommandCreatedEventHandler):
@@ -1052,6 +1103,12 @@ def _do_import(inputs):
                         log.append("timeline group failed: {}".format(exc))
             except Exception as exc:
                 log.append("connectors failed: {}".format(exc))
+
+    if data.get("mounts"):
+        try:
+            _add_mounts(comp, data["mounts"], log)
+        except Exception as exc:
+            log.append("mounts failed: {}".format(exc))
 
     checks = data.get("checks", {})
     length_note = ""

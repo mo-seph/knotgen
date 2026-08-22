@@ -140,6 +140,10 @@ The printed piece length between joins is reported at export time (and stored in
 
 **Sweep twist fidelity**: only the guide-rail sweeps (strip edge a/b) follow the computed strip frames. A **plain sweep ignores them** — Fusion uses its own minimal-twist frame, so the body won't match the strip surface, connectors or LED plan. The plain fallback is therefore *off by default* when a strip exists: enable "Allow plain-sweep fallback" in the dialog to force a body anyway, and the final report shouts a WARNING whenever a plain sweep was actually used.
 
+## Mounting on a base
+
+`--mount MM` (repeatable; `c2:450` for a link's second component) exports a full coordinate frame at that arc position, and KnotImport turns each into a **Joint Origin** (`mount 01`, …) — origin on the path, x along the path, z out of the LED face. Put a Joint Origin on your base where the knot should land, then one **rigid joint** between the two joint origins aligns everything: all three rotations come from the frames, no Move gymnastics, no hand-built planes. Fine-tune afterwards by editing either joint origin's angle/offset parameters, or regenerate with a different `--mount` position. Needs `--strip` (frames come from the strip solver).
+
 ## Fusion side
 
 One-time install:

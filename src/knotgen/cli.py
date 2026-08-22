@@ -157,6 +157,12 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--connector-offset", type=float, default=0.0, metavar="MM",
                      help="shift the first connector this far along each component "
                           "(choose where the joins land; default 0)")
+    gen.add_argument("--mount", action="append", default=None, metavar="MM",
+                     help="export a mounting frame at this arc position (mm from the "
+                          "path start; 'c2:450' targets component 2 of a link). "
+                          "Repeatable. KnotImport creates a Joint Origin at each — "
+                          "attach a base with one rigid joint, full orientation "
+                          "included. Needs --strip")
     gen.add_argument("--out", default=None, metavar="FILE",
                      help="write the JSON export (for the Fusion KnotImport script); "
                           "a bare filename goes into output/, move keepers to designs/")
@@ -383,6 +389,23 @@ def cmd_gen(args: argparse.Namespace) -> int:
         elif want_connectors:
             print("  (--connectors/--connector-spacing need --strip for "
                   "orientation frames; skipped)")
+
+        if args.mount and strip_frames is not None:
+            from knotgen.export import build_mounts_section
+
+            specs = []
+            for m in args.mount:
+                if ":" in m:
+                    comp_part, mm_part = m.split(":", 1)
+                    specs.append((int(comp_part.lstrip("cC")) - 1, float(mm_part)))
+                else:
+                    specs.append((0, float(m)))
+            doc["mounts"] = build_mounts_section(strip_frames, specs)
+            for fr in doc["mounts"]["frames"]:
+                comp_label = (f"c{fr['component'] + 1} " if n_comp > 1 else "")
+                print(f"  mount frame: {comp_label}at {fr['s_mm']:g} mm along the path")
+        elif args.mount:
+            print("  (--mount needs --strip for orientation frames; skipped)")
         out = export_json(_resolve_out(args.out), doc)
         print(f"  wrote {out}  (fit deviation {doc['checks']['fit_max_deviation_mm']} mm)")
     elif args.out and failed:
