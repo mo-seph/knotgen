@@ -134,7 +134,8 @@ Connector copies land in their own root-level component (`<knot> connectors`), a
 
 Two more dialog options (both keyed to the connector component):
 - **Cut bodies** — select body/bodies in the connector component and they are Combine→Cut out of each swept piece at every connector position (tools kept). Leave empty for no cut.
-- **Label anchor point** — select a sketch point in the connector component and each piece gets an ID string engraved there (`prefix + number`, `c2-` inserted for links). The anchor's sketch defines the text plane: baseline along its x-axis, engraved along −z. Text height and depth are dialog values.
+- **Label anchor point** — select a sketch point in the connector component and each *joint* gets its number engraved (`prefix + number`, `c2-` inserted for links). By default it's engraved on **both sides** of the joint (the anchor mirrored by a 180° rotation about the joint's normal), so a part between joints 4 and 5 reads "4" on one end and "5" on the other, and mating ends share a number for assembly. Labels are cut into the body *before* segmentation with a symmetric two-way extrude — fast and direction-proof. Text height/depth are dialog values; place the anchor clear of the connector's cut bodies so the socket cut doesn't slice through the text.
+- **Scale factor** — dialog value (default 1) applied to all imported geometry (path, strip, connector/mount positions) but not to your profile, connector components, or label text — those stay physical size. Handy for late size tweaks without regenerating; preflight numbers in the JSON refer to scale 1, so rescale them mentally (clearances scale linearly).
 
 The printed piece length between joins is reported at export time (and stored in the JSON under `connectors.per_component`). If Fusion's closed-path sweep glitches, the script automatically retries at 0.99999 of the path length — a known kernel quirk; the hairline gap is irrelevant for printing or can be patched.
 

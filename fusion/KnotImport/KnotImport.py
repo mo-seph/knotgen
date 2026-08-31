@@ -33,10 +33,15 @@ _app = None
 _ui = None
 _data = None
 _handlers = []
+_scale = 1.0  # dialog scale factor: applied to every imported coordinate
+# (path, strip, connector/mount positions) but NOT to user geometry —
+# profiles, connector components and label text stay physical size
 
 
 def _point3d(xyz):
-    return adsk.core.Point3D.create(xyz[0] * MM, xyz[1] * MM, xyz[2] * MM)
+    return adsk.core.Point3D.create(
+        xyz[0] * MM * _scale, xyz[1] * MM * _scale, xyz[2] * MM * _scale
+    )
 
 
 def _vector3d(xyz):
@@ -531,15 +536,21 @@ def _cut_connector_bodies(design, knot_occ, conn_occ, placed, cut_bodies,
 
 
 def _add_labels(comp, placed, label_point, prefix, height_cm, depth_cm,
-                swept_bodies, swept_names, flip_text, log):
-    """Engrave an ID string into each piece at the authored label anchor.
+                swept_bodies, both_sides, flip_text, log):
+    """Engrave joint numbers at the authored label anchor.
 
-    label_point: a sketch point in the connector component. Its sketch's
-    plane carries the text (baseline along sketch x); the cut goes into
-    the piece along -z of that sketch — computed per label, not guessed.
-    flip_text rotates the text 180 degrees in its plane (kept centred on
-    the same spot). Numbering: prefix + running number per component,
-    with 'c2-' inserted for multi-component links.
+    Runs BEFORE the segmentation cut: the target is the single swept body,
+    so no containment probing is needed, and the cut is a symmetric two-way
+    extrude, so no direction computation either — material on either side
+    of the text plane gets engraved.
+
+    both_sides: also engrave each joint's number on the OTHER side of the
+    connector (the anchor rotated 180 degrees about the joint's LED-normal
+    axis), so a part between joints 4 and 5 reads "4" on one end and "5" on
+    the other, and mating ends share a number.
+
+    flip_text rotates the text 180 degrees in its plane. Numbering: prefix
+    + joint number per component, 'c2-' inserted for multi-component links.
     """
     import math
 
@@ -567,18 +578,35 @@ def _add_labels(comp, placed, label_point, prefix, height_cm, depth_cm,
         text = "{}{}{}".format(
             prefix, "c{}-".format(ci + 1) if multi else "", counters[ci]
         )
-        p0 = to_world(m, p.x, p.y, p.z)
-        px = to_world(m, p.x + 1.0, p.y, p.z)
-        pz = to_world(m, p.x, p.y, p.z + 1.0)  # outward normal direction
-        py = to_world(m, p.x, p.y + 1.0, p.z)
-        sp0 = anchors.sketchPoints.add(p0)
-        spx = anchors.sketchPoints.add(px)
-        spy = anchors.sketchPoints.add(py)
-        jobs.append((text, ci, p0, px, pz, sp0, spx, spy))
+        placements = [m]
+        if both_sides:
+            # same joint number on the far side: rotate the placement 180
+            # degrees about the joint's LED-normal axis (a rotation, so the
+            # text stays readable, never mirrored)
+            origin, tangent, width, led = _frame_vectors(fr)
+            rot = adsk.core.Matrix3D.create()
+            rot.setToRotation(math.pi, led, origin)
+            m2 = m.copy()
+            m2.transformBy(rot)
+            placements.append(m2)
+        for pm in placements:
+            p0 = to_world(pm, p.x, p.y, p.z)
+            px = to_world(pm, p.x + 1.0, p.y, p.z)
+            py = to_world(pm, p.x, p.y + 1.0, p.z)
+            sp0 = anchors.sketchPoints.add(p0)
+            spx = anchors.sketchPoints.add(px)
+            spy = anchors.sketchPoints.add(py)
+            jobs.append((text, ci, p0, px, sp0, spx, spy))
     anchors.isComputeDeferred = False
 
-    for text, ci, p0, px, pz, sp0, spx, spy in jobs:
+    for text, ci, p0, px, sp0, spx, spy in jobs:
         try:
+            target = swept_bodies.get(ci)
+            if target is None:
+                log.append(
+                    "label '{}' skipped: no swept body".format(text)
+                )
+                continue
             plane_input = comp.constructionPlanes.createInput()
             plane_input.setByThreePoints(sp0, spx, spy)
             plane = comp.constructionPlanes.add(plane_input)
@@ -592,8 +620,6 @@ def _add_labels(comp, placed, label_point, prefix, height_cm, depth_cm,
             box_w = max(len(text), 1) * height_cm * 1.2
             box_h = height_cm * 1.6
             if flip_text:
-                # rotate 180 in-plane but keep the text over the same spot:
-                # the new corner is the old box's far corner
                 corner = adsk.core.Point3D.create(
                     corner.x + box_w * math.cos(angle) - box_h * math.sin(angle),
                     corner.y + box_w * math.sin(angle) + box_h * math.cos(angle),
@@ -620,71 +646,38 @@ def _add_labels(comp, placed, label_point, prefix, height_cm, depth_cm,
                 pass
             text_obj = sk.sketchTexts.add(tin)
 
-            # engrave INTO the piece: the label sketch's +z (authored) points
-            # OUT of the body; compare it with this text sketch's own z to
-            # pick the cut sign instead of guessing
-            _, sk_x, sk_y, sk_z = sk.transform.getAsCoordinateSystem()
-            out_dir = adsk.core.Vector3D.create(
-                pz.x - p0.x, pz.y - p0.y, pz.z - p0.z
-            )
-            depth = -depth_cm if sk_z.dotProduct(out_dir) > 0 else depth_cm
-
-            # find the target body by CONTAINMENT: probe a point just inside
-            # the surface under the anchor. Name-based lookup fails once the
-            # connector cut has severed the sweep into Segment pieces (only
-            # one fragment keeps the original name) — which is exactly what
-            # produced the "No target body!" warnings.
-            probe = adsk.core.Point3D.create(
-                p0.x - 0.1 * (pz.x - p0.x),
-                p0.y - 0.1 * (pz.y - p0.y),
-                p0.z - 0.1 * (pz.z - p0.z),
-            )
-            target = None
-            for bi in range(comp.bRepBodies.count):
-                b = comp.bRepBodies.item(bi)
-                try:
-                    if not b.isSolid:
-                        continue
-                    cont = b.pointContainment(probe)
-                    if cont in (
-                        adsk.fusion.PointContainment.PointInsidePointContainment,
-                        adsk.fusion.PointContainment.PointOnPointContainment,
-                    ):
-                        target = b
-                        break
-                except Exception:
-                    continue
-            if target is None:
-                name = swept_names.get(ci)
-                if name:
-                    try:
-                        target = comp.bRepBodies.itemByName(name)
-                    except Exception:
-                        target = None
-            if target is None:
-                target = swept_bodies.get(ci)
-            if target is None:
-                # nothing to engrave into (e.g. the sweep failed) — cutting
-                # without a participant filter would carve random bodies
-                log.append(
-                    "label '{}' skipped: no body under anchor".format(text)
+            # symmetric two-way cut: depth into the body whichever side it
+            # is on (the other half of the extent just cuts air)
+            done = False
+            try:
+                ein = comp.features.extrudeFeatures.createInput(
+                    text_obj, adsk.fusion.FeatureOperations.CutFeatureOperation
                 )
-                continue
-            for d in (depth, -depth):  # computed sign first, opposite as rescue
-                try:
-                    ein = comp.features.extrudeFeatures.createInput(
-                        text_obj,
-                        adsk.fusion.FeatureOperations.CutFeatureOperation,
-                    )
-                    ein.setDistanceExtent(
-                        False, adsk.core.ValueInput.createByReal(d)
-                    )
-                    ein.participantBodies = [target]
-                    comp.features.extrudeFeatures.add(ein)
-                    made += 1
-                    break
-                except Exception:
-                    continue
+                ein.setSymmetricExtent(
+                    adsk.core.ValueInput.createByReal(2.0 * depth_cm), True
+                )
+                ein.participantBodies = [target]
+                comp.features.extrudeFeatures.add(ein)
+                made += 1
+                done = True
+            except Exception:
+                pass
+            if not done:
+                for d in (-depth_cm, depth_cm):  # one-sided rescue
+                    try:
+                        ein = comp.features.extrudeFeatures.createInput(
+                            text_obj,
+                            adsk.fusion.FeatureOperations.CutFeatureOperation,
+                        )
+                        ein.setDistanceExtent(
+                            False, adsk.core.ValueInput.createByReal(d)
+                        )
+                        ein.participantBodies = [target]
+                        comp.features.extrudeFeatures.add(ein)
+                        made += 1
+                        break
+                    except Exception:
+                        continue
         except Exception as exc:
             log.append("label '{}' failed: {}".format(text, exc))
     anchors.isVisible = False
@@ -760,6 +753,11 @@ class _Created(adsk.core.CommandCreatedEventHandler):
             dd.listItems.add("Exact NURBS", True)
             dd.listItems.add("Editable fitted spline", False)
 
+            inputs.addValueInput(
+                "scaleFactor", "Scale factor", "",
+                adsk.core.ValueInput.createByReal(1.0),
+            )
+
             if _data.get("strips") or _data.get("strip"):
                 sd = inputs.addDropDownCommandInput(
                     "stripMode", "LED strip surface",
@@ -834,6 +832,11 @@ class _Created(adsk.core.CommandCreatedEventHandler):
                 inputs.addBoolValueInput(
                     "flipLabels", "Rotate label text 180°", True, "", False,
                 )
+                inputs.addBoolValueInput(
+                    "labelBothSides",
+                    "Label both sides of each joint (4|5 on mating ends)",
+                    True, "", True,
+                )
                 inputs.addValueInput(
                     "labelHeight", "Label text height", "mm",
                     adsk.core.ValueInput.createByReal(0.6),
@@ -867,9 +870,16 @@ class _Execute(adsk.core.CommandEventHandler):
 
 
 def _do_import(inputs):
+    global _scale
     data = _data
     design = adsk.fusion.Design.cast(_app.activeProduct)
     paths = data.get("paths") or [data["path"]]
+
+    _scale = 1.0
+    if inputs.itemById("scaleFactor"):
+        v = inputs.itemById("scaleFactor").value
+        if v > 0:
+            _scale = v
 
     want_exact = (
         inputs.itemById("curveType").selectedItem.name == "Exact NURBS"
@@ -932,6 +942,10 @@ def _do_import(inputs):
     )
     flip_labels = bool(
         inputs.itemById("flipLabels") and inputs.itemById("flipLabels").value
+    )
+    label_both = bool(
+        inputs.itemById("labelBothSides") is None
+        or inputs.itemById("labelBothSides").value
     )
 
     root = design.rootComponent
@@ -1030,13 +1044,6 @@ def _do_import(inputs):
                     allow_plain, plain_used,
                 )
 
-    swept_names = {}
-    for pi, body in swept_bodies.items():
-        try:
-            swept_names[pi] = body.name if body is not None else None
-        except Exception:
-            swept_names[pi] = None
-
     if place_conn and data.get("connectors"):
         if ref_entity is None:
             log.append("connectors skipped: select a reference point (its "
@@ -1069,14 +1076,10 @@ def _do_import(inputs):
                         ref_sketch, ref_pt, flip_conn, log,
                     )
 
-                    if placed and cut_bodies:
-                        _cut_connector_bodies(
-                            design, occ, conn_occ, placed, cut_bodies,
-                            swept_bodies, dict(enumerate(curves)), log,
-                        )
-                    elif cut_bodies and not placed:
-                        log.append("cut skipped: no connectors placed")
-
+                    # labels BEFORE the segmentation cut: the target is the
+                    # single swept body, so the engraves need no containment
+                    # probing and use a symmetric two-way extrude — and the
+                    # segments inherit their numbers when the cut splits them
                     if placed and label_entity is not None:
                         if label_entity.parentSketch.parentComponent != target_comp:
                             log.append(
@@ -1087,8 +1090,16 @@ def _do_import(inputs):
                             _add_labels(
                                 comp, placed, label_entity, label_prefix,
                                 label_height, label_depth, swept_bodies,
-                                swept_names, flip_labels, log,
+                                label_both, flip_labels, log,
                             )
+
+                    if placed and cut_bodies:
+                        _cut_connector_bodies(
+                            design, occ, conn_occ, placed, cut_bodies,
+                            swept_bodies, dict(enumerate(curves)), log,
+                        )
+                    elif cut_bodies and not placed:
+                        log.append("cut skipped: no connectors placed")
 
                     # collapse everything connector-related into one group
                     try:
