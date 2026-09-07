@@ -67,6 +67,26 @@ def _symmetry_projection(knot: FourierKnot, n: int) -> FourierKnot:
     return replace(knot, a=a, b=b)
 
 
+def _smooth_circular(F: np.ndarray, sigma_idx: float) -> np.ndarray:
+    """Gaussian-smooth a per-sample force field along the (closed) curve.
+
+    Raw forces are sample-level spikes; applied directly they inject
+    high-frequency wiggle that a high-harmonic refit then faithfully keeps.
+    Smoothing over roughly the tube scale makes every push act on a whole
+    passage of strand instead."""
+    if sigma_idx < 0.6:
+        return F
+    r = int(3 * sigma_idx)
+    x = np.arange(-r, r + 1)
+    k = np.exp(-0.5 * (x / sigma_idx) ** 2)
+    k /= k.sum()
+    out = np.empty_like(F)
+    for c in range(F.shape[1]):
+        padded = np.concatenate([F[-r:, c], F[:, c], F[:r, c]])
+        out[:, c] = np.convolve(padded, k, mode="valid")
+    return out
+
+
 def _sample_all(link: FourierLink, per_comp: list[int]):
     ts, pts, comp_id, idx = [], [], [], []
     for ci, (comp, n) in enumerate(zip(link.components, per_comp)):
@@ -105,7 +125,9 @@ def relax(
     per_comp = []
     harmonics = []
     for comp in link.components:
-        h = max(comp.n_harmonics, 24)
+        # cap the refit bandwidth: harmonic content beyond ~128 is invisible
+        # at lamp scale but happily preserves injected force noise
+        h = min(max(comp.n_harmonics, 24), 128)
         per_comp.append(int(min(max(256, 2 * h + 64), 768)))
         harmonics.append(h)
 
@@ -164,6 +186,15 @@ def relax(
                 )
             off += per_comp[ci]
 
+        # smooth the force field per component at the tube scale
+        off = 0
+        for ci in range(len(comps)):
+            n_i = per_comp[ci]
+            ds = comps[ci].total_length() / n_i
+            sigma_idx = (target_gap / 2.0) / ds
+            F[off:off + n_i] = _smooth_circular(F[off:off + n_i], sigma_idx)
+            off += n_i
+
         # topology-safe step cap: never move more than 1/4 of the current gap
         cur_gap, _, _ = min_clearance(work)
         max_move = np.linalg.norm(F, axis=1).max()
@@ -208,6 +239,9 @@ def relax(
         "tube": tube, "iterations": done_at,
         "gap_before": round(float(gap0), 2), "gap_after": round(float(gap1), 2),
         "bend_before": round(1.0 / kap0, 2), "bend_after": round(1.0 / kap1, 2),
+        "converged": bool(
+            gap1 >= 0.99 * target_gap and 1.0 / kap1 >= 0.99 * target_bend
+        ),
     }
     info = result.meta["relaxed"]
     if single:

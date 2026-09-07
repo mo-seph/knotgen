@@ -288,6 +288,10 @@ def cmd_gen(args: argparse.Namespace) -> int:
         print(f"  relaxed in {info['iterations']} iterations: "
               f"strand gap {info['gap_before']:g} -> {info['gap_after']:g} mm, "
               f"bend radius {info['bend_before']:g} -> {info['bend_after']:g} mm")
+        if not info.get("converged", True):
+            print("  ! relaxation plateaued short of the target — this tube may "
+                  "not fit at this width; try a larger --width, shallower "
+                  "--depth crush, or accept the preflight verdict below")
 
     if args.wall:
         from knotgen.transforms import floor_z
