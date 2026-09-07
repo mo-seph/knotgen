@@ -172,8 +172,8 @@ def preview(
     if tube_diameter:
         for _, pts in sampled:
             # decimate: opaque shaded tubes get heavy to rotate at full res
-            step = max(len(pts) // 400, 1)
-            X, Y, Z = _tube_mesh(pts[::step], tube_diameter / 2.0)
+            step = max(len(pts) // 600, 1)
+            X, Y, Z = _tube_mesh(pts[::step], tube_diameter / 2.0, sides=24)
             surf = ax.plot_surface(
                 X, Y, Z, color="#e8934a", linewidth=0, antialiased=False,
                 shade=True, rcount=X.shape[0], ccount=X.shape[1],
@@ -184,6 +184,7 @@ def preview(
     ribbon_modes: dict[str, list] = {
         "edgewise": [], "curvature": [], "sides": []
     }
+    arrow_artists = []
     if strips and strip_width:
         cmap_e = plt.get_cmap("plasma")
         cmap_c = plt.get_cmap("viridis")
@@ -245,12 +246,13 @@ def preview(
             arrow = 0.9 * strip_width
             for i in range(0, len(s.points), step):
                 p, nrm = s.points[i], s.normals[i]
-                ax.plot(
+                (al,) = ax.plot(
                     [p[0], p[0] + arrow * nrm[0]],
                     [p[1], p[1] + arrow * nrm[1]],
                     [p[2], p[2] + arrow * nrm[2]],
                     color=arrow_colour, lw=0.8, alpha=0.7,
                 )
+                arrow_artists.append(al)
         if not clean:
             sm = plt.cm.ScalarMappable(
                 cmap=cmap_e, norm=plt.Normalize(vmin=0.0, vmax=vmax_e)
@@ -320,7 +322,8 @@ def preview(
     # is shown — if the 3D axes overlaps them, interactive rotation repaints
     # the axes over the buttons and they vanish after the first drag
     fig.subplots_adjust(
-        left=0.0, right=1.0, bottom=0.055 if strips else 0.0, top=1.0
+        left=0.0, right=1.0,
+        bottom=0.055 if ((strips or show) and not clean) else 0.0, top=1.0,
     )
 
     if save:
@@ -330,7 +333,7 @@ def preview(
     if show:
         # free our shortcut keys from matplotlib's default bindings
         # (e.g. 's' is Save, 'g' is grid — they'd fire alongside ours)
-        our_keys = {"t", "m", "g", "p", "1", "2", "3"}
+        our_keys = {"t", "m", "g", "p", "n", "1", "2", "3"}
         for param in list(plt.rcParams):
             if param.startswith("keymap."):
                 for k in our_keys & set(plt.rcParams[param]):
@@ -355,52 +358,90 @@ def preview(
                     artist.set_visible(name == mode)
             fig.canvas.draw_idle()
 
+        def toggle(artists):
+            for artist in artists:
+                artist.set_visible(not artist.get_visible())
+            fig.canvas.draw_idle()
+
         axes_on = [True]
+
+        def toggle_axes():
+            axes_on[0] = not axes_on[0]
+            if axes_on[0]:
+                ax.set_axis_on()
+            else:
+                ax.set_axis_off()
+            fig.canvas.draw_idle()
+
         mode_keys = {"1": "curvature", "2": "edgewise", "3": "sides"}
+        toggle_keys = {
+            "t": groups["triad"],
+            "m": groups["start"],
+            "p": tube_artists,
+            "n": arrow_artists,
+        }
 
         def on_key(event):
-            key_groups = {"t": "triad", "m": "start"}
-            if event.key in key_groups:
-                for artist in groups[key_groups[event.key]]:
-                    artist.set_visible(not artist.get_visible())
-                fig.canvas.draw_idle()
+            if event.key in toggle_keys and toggle_keys[event.key]:
+                toggle(toggle_keys[event.key])
             elif event.key in mode_keys and strips:
                 set_mode(mode_keys[event.key])
             elif event.key == "g":
-                axes_on[0] = not axes_on[0]
-                if axes_on[0]:
-                    ax.set_axis_on()
-                else:
-                    ax.set_axis_off()
-                fig.canvas.draw_idle()
-            elif event.key == "p" and tube_artists:
-                for artist in tube_artists:
-                    artist.set_visible(not artist.get_visible())
-                fig.canvas.draw_idle()
+                toggle_axes()
             elif event.key in ("cmd+q", "ctrl+q", "q"):
                 plt.close(fig)
 
         fig.canvas.mpl_connect("scroll_event", on_scroll)
         fig.canvas.mpl_connect("key_press_event", on_key)
 
-        help_line = ("viewer: scroll = zoom, drag = rotate | keys: [t]riad, "
-                     "[m] start markers, [g] axes, [p] tube, [q]uit")
-        if strips:
+        # button row along the bottom: colour modes (strip only) + toggles
+        if not clean:
             from matplotlib.widgets import Button
 
+            entries = []
+            if strips:
+                entries += [
+                    ("curvature", lambda: set_mode("curvature")),
+                    ("edgewise", lambda: set_mode("edgewise")),
+                    ("sides", lambda: set_mode("sides")),
+                ]
+            entries += [
+                ("triad [t]", lambda: toggle(groups["triad"])),
+                ("start [m]", lambda: toggle(groups["start"])),
+            ]
+            if tube_artists:
+                entries.append(("tube [p]", lambda: toggle(tube_artists)))
+            if arrow_artists:
+                entries.append(("normals [n]", lambda: toggle(arrow_artists)))
+            entries.append(("axes [g]", toggle_axes))
+
             buttons = []
-            for i, (label, mode) in enumerate(
-                (("curvature", "curvature"), ("edgewise", "edgewise"),
-                 ("sides", "sides"))
-            ):
-                bax = fig.add_axes([0.01 + i * 0.095, 0.005, 0.09, 0.04])
-                btn = Button(bax, label)
-                btn.on_clicked(lambda _, m=mode: set_mode(m))
+            x = 0.01
+            for label, cb in entries:
+                w = 0.013 + 0.0105 * len(label)
+                bax = fig.add_axes([x, 0.005, w, 0.042])
+                if dark:
+                    btn = Button(bax, label, color="#2a2d34",
+                                 hovercolor="#3f434e")
+                    btn.label.set_color(fg)
+                else:
+                    btn = Button(bax, label)
+                btn.label.set_fontsize(8)
+                btn.on_clicked(lambda _, f=cb: f())
                 buttons.append(btn)
+                x += w + 0.008
             fig._knotgen_buttons = buttons  # keep references alive
-            help_line += " | strip colours: buttons or [1] curvature, [2] edgewise, [3] sides (blue=LED face, yellow=back)"
-        else:
-            help_line += " | (colour-mode buttons appear when a strip is shown — add --strip W)"
+
+            fig.text(
+                0.01, 0.985,
+                "drag rotate · scroll zoom · q quit",
+                color=fg, fontsize=8, alpha=0.75, va="top",
+            )
+
+        help_line = ("viewer: scroll = zoom, drag = rotate | buttons or keys: "
+                     "[t]riad, [m] start, [p] tube, [n]ormals, [g] axes, [q]uit")
+        if strips:
+            help_line += " | strip colours: [1] curvature, [2] edgewise, [3] sides (blue=LED face, yellow=back)"
         print(help_line)
         plt.show()
     else:
