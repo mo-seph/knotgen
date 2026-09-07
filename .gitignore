@@ -8,3 +8,4 @@ output/
 *.png
 !docs/images/*.png
 /*.json
+.DS_Store
