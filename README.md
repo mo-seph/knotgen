@@ -2,16 +2,16 @@
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/pentafoil.png" alt="Pentafoil (5_1) with LED strip ribbon"/></td>
-<td width="50%"><img src="docs/images/8_2.png" alt="8_2 knot with strip, LEDs facing down"/></td>
+<td width="50%"><img src="docs/images/fusion_example.jpg" alt="Wall mounted 8_2 lamp"/></td>
+<td><img src="docs/images/11a2.png" alt="11a2 ideal conformation"/></td>
 </tr>
 <tr>
-<td><img src="docs/images/11a2.png" alt="11a2 ideal conformation"/></td>
+<td width="50%"><img src="docs/images/8_2.png" alt="8_2 knot with strip, LEDs facing down"/></td>
 <td><img src="docs/images/w37_racetrack.png" alt="W(3,7) racetrack braid with split crossings"/></td>
 </tr>
 </table>
 
-> **Note**: this codebase was almost entirely written by an AI (Anthropic's Claude), working under human direction — the design decisions, requirements and testing-in-anger are human, the code is machine-generated. Read it with that in mind. MIT licensed ([LICENSE](LICENSE)).
+> **Note**: this codebase was almost entirely written by Claude; read it with that in mind. MIT licensed ([LICENSE](LICENSE)).
 
 Generate mathematical knots and links as closed 3D curves, preview them, sanity-check them against a tube diameter, and import them into Fusion 360 as continuous sweepable paths.
 
