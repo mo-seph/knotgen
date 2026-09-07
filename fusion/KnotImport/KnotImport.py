@@ -124,7 +124,8 @@ def _new_surface_loft_input(comp):
 
 # ------------------------------------------------------------ strip surfaces
 
-def _strip_quick(comp, strip, center_curve, want_exact, log):
+def _strip_quick(comp, strip, center_curve, want_exact, log,
+                 sketches_out=None):
     """Rung-line loft (edge-to-edge lofts are rejected for twisted closed
     bands). Edge splines are still created for use as sweep guide rails.
     Returns the two edge curves."""
@@ -175,6 +176,8 @@ def _strip_quick(comp, strip, center_curve, want_exact, log):
         log.append("strip body rename failed: {}".format(exc))
     log.append("strip: rung loft ({} sections)".format(len(lines)))
     rung_sketch.isVisible = False
+    if sketches_out is not None:
+        sketches_out += [sketch, rung_sketch]
     return edges
 
 
@@ -236,7 +239,8 @@ def _ref_in_sketch_space(ref_point, sketch):
 
 
 def _sweep_profiles(comp, center_curve, rail_curves, frame0, suffix, log,
-                    src_profiles, ref_sketch_pt, allow_plain, plain_used):
+                    src_profiles, ref_sketch_pt, allow_plain, plain_used,
+                    profile_scale=1.0):
     """Copy the selected profile set onto a plane perpendicular to the path
     start and sweep it. ref_sketch_pt: reference point in SOURCE sketch
     coords — it lands on the path."""
@@ -319,11 +323,32 @@ def _sweep_profiles(comp, center_curve, rail_curves, frame0, suffix, log,
         )
         return False
 
+    # parametric profile scale: bound to the 'knotProfileScale' user
+    # parameter about the path point — edit the parameter later and the
+    # sweep rebuilds with the resized profile
+    try:
+        design = comp.parentDesign
+        _ensure_param(design, "knotProfileScale", profile_scale,
+                      "knotgen: swept profile scale")
+        pivot = sk.sketchPoints.add(
+            adsk.core.Point3D.create(target_center.x, target_center.y, 0.0)
+        )
+        coll = adsk.core.ObjectCollection.create()
+        coll.add(sk)
+        sin = comp.features.scaleFeatures.createInput(
+            coll, pivot, adsk.core.ValueInput.createByString("knotProfileScale")
+        )
+        comp.features.scaleFeatures.add(sin)
+        log.append("profile scale bound to 'knotProfileScale'")
+    except Exception as exc:
+        log.append("profile scale failed: {}".format(exc))
+
     # match copied profiles to the selected set by area
     src_areas = []
     for p in src_profiles:
         try:
-            src_areas.append(p.areaProperties().area)
+            # the copied sketch is scaled by knotProfileScale before matching
+            src_areas.append(p.areaProperties().area * profile_scale ** 2)
         except Exception:
             src_areas.append(None)
     chosen = adsk.core.ObjectCollection.create()
@@ -684,6 +709,49 @@ def _add_labels(comp, placed, label_point, prefix, height_cm, depth_cm,
     else:
         log.append("labels: none engraved — text sketches may need manual cut")
 
+# ------------------------------------------------------- user parameters
+
+def _ensure_param(design, name, value, comment):
+    """Create (or update) a unitless user parameter."""
+    p = design.userParameters.itemByName(name)
+    if p:
+        try:
+            p.expression = "{:g}".format(value)
+        except Exception:
+            pass
+        return p
+    return design.userParameters.add(
+        name, adsk.core.ValueInput.createByReal(value), "", comment
+    )
+
+
+def _apply_knot_scale(design, comp, sketches, log):
+    """Scale feature over the knot's geometry sketches, driven by the
+    'knotScale' user parameter — edit the parameter later and the path,
+    strip and everything downstream (lofts, sweeps) rebuilds. Connector /
+    label / mount placements are static transforms and will NOT follow."""
+    try:
+        _ensure_param(design, "knotScale", 1.0,
+                      "knotgen: post-import knot scale (sketches rebuild; "
+                      "re-run connectors after changing)")
+        coll = adsk.core.ObjectCollection.create()
+        for s in sketches:
+            coll.add(s)
+        if coll.count == 0:
+            return
+        sin = comp.features.scaleFeatures.createInput(
+            coll, comp.originConstructionPoint,
+            adsk.core.ValueInput.createByString("knotScale"),
+        )
+        comp.features.scaleFeatures.add(sin)
+        log.append(
+            "knot scale bound to user parameter 'knotScale' "
+            "({} sketches)".format(coll.count)
+        )
+    except Exception as exc:
+        log.append("knotScale feature failed: {}".format(exc))
+
+
 # ------------------------------------------------------------------- mounts
 
 def _add_mounts(comp, mounts, log):
@@ -779,6 +847,10 @@ class _Created(adsk.core.CommandCreatedEventHandler):
             )
             prof_sel.addSelectionFilter("Profiles")
             prof_sel.setSelectionLimits(0, 0)
+            inputs.addValueInput(
+                "profileScale", "Profile scale", "",
+                adsk.core.ValueInput.createByReal(1.0),
+            )
 
             if _data.get("strips") or _data.get("strip"):
                 inputs.addBoolValueInput(
@@ -889,6 +961,12 @@ def _do_import(inputs):
         inputs.itemById("pipe") and inputs.itemById("pipe").value
     )
 
+    profile_scale = 1.0
+    if inputs.itemById("profileScale"):
+        v = inputs.itemById("profileScale").value
+        if v > 0:
+            profile_scale = v
+
     prof_input = inputs.itemById("profiles")
     src_profiles = [
         adsk.fusion.Profile.cast(prof_input.selection(i).entity)
@@ -945,8 +1023,10 @@ def _do_import(inputs):
 
     log = []
     curves = []
+    geom_sketches = []
     for pi, pathdoc in enumerate(paths):
         sketch = comp.sketches.add(comp.xYConstructionPlane)
+        geom_sketches.append(sketch)
         sketch.name = "{} path c{}".format(data.get("name", "knot"), pi + 1)
         sketch.isComputeDeferred = True
         first = None
@@ -969,6 +1049,33 @@ def _do_import(inputs):
             return
         curves.append(first)
 
+    # a simple origin circle to joint against later
+    try:
+        mount_sk = comp.sketches.add(comp.xYConstructionPlane)
+        mount_sk.name = "central mount point"
+        mount_sk.sketchCurves.sketchCircles.addByCenterRadius(
+            adsk.core.Point3D.create(0.0, 0.0, 0.0), 1.0
+        )
+    except Exception as exc:
+        log.append("central mount point failed: {}".format(exc))
+
+    rails = {}
+    strips = data.get("strips") or ([data["strip"]] if data.get("strip") else [])
+    if strips and strip_mode != "none":
+        try:
+            for strip in strips:
+                ci = strip.get("component", 0)
+                if strip_mode == "quick":
+                    edges = _strip_quick(comp, strip, curves[ci], want_exact,
+                                         log, sketches_out=geom_sketches)
+                    rails[ci] = edges
+                else:
+                    _strip_editable(comp, strip, curves[ci], log)
+        except Exception as exc:
+            log.append("strip failed: {}".format(exc))
+
+    _apply_knot_scale(design, comp, geom_sketches, log)
+
     if want_pipe and data.get("pipe_preview"):
         try:
             for pi, curve in enumerate(curves):
@@ -988,20 +1095,6 @@ def _do_import(inputs):
             log.append("pipe preview(s) created")
         except Exception as exc:
             log.append("pipe failed: {}".format(exc))
-
-    rails = {}
-    strips = data.get("strips") or ([data["strip"]] if data.get("strip") else [])
-    if strips and strip_mode != "none":
-        try:
-            for strip in strips:
-                ci = strip.get("component", 0)
-                if strip_mode == "quick":
-                    edges = _strip_quick(comp, strip, curves[ci], want_exact, log)
-                    rails[ci] = edges
-                else:
-                    _strip_editable(comp, strip, curves[ci], log)
-        except Exception as exc:
-            log.append("strip failed: {}".format(exc))
 
     swept_bodies = {}
     plain_used = []
@@ -1031,7 +1124,7 @@ def _do_import(inputs):
                 swept_bodies[pi] = _sweep_profiles(
                     comp, curve, rails.get(pi) or [], frame0,
                     "c{}".format(pi + 1), log, src_profiles, ref_pt,
-                    allow_plain, plain_used,
+                    allow_plain, plain_used, profile_scale,
                 )
 
     if place_conn and data.get("connectors"):
