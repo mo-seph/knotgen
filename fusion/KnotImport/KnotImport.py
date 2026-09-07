@@ -335,11 +335,10 @@ def _sweep_profiles(comp, center_curve, rail_curves, frame0, suffix, log,
         )
         coll = adsk.core.ObjectCollection.create()
         coll.add(sk)
-        sin = comp.features.scaleFeatures.createInput(
-            coll, pivot, adsk.core.ValueInput.createByString("knotProfileScale")
+        _add_scale_feature(
+            comp, coll, pivot, "knotProfileScale", profile_scale,
+            log, "profile scale",
         )
-        comp.features.scaleFeatures.add(sin)
-        log.append("profile scale bound to 'knotProfileScale'")
     except Exception as exc:
         log.append("profile scale failed: {}".format(exc))
 
@@ -731,6 +730,39 @@ def _ensure_param(design, name, value, comment):
     )
 
 
+def _add_scale_feature(comp, entities, pivot, param_name, value, log, label):
+    """Scale feature driven by a user parameter, with fallback.
+
+    Some Fusion builds reject a parameter-name expression in
+    ScaleFeatures.createInput ('invalid expression'); the reliable route is
+    to create the feature numerically and then bind its model parameter."""
+    scales = comp.features.scaleFeatures
+    try:
+        sin = scales.createInput(
+            entities, pivot, adsk.core.ValueInput.createByString(param_name)
+        )
+        feat = scales.add(sin)
+        log.append("{} bound to '{}'".format(label, param_name))
+        return feat
+    except Exception:
+        pass
+    sin = scales.createInput(
+        entities, pivot, adsk.core.ValueInput.createByReal(value)
+    )
+    feat = scales.add(sin)
+    try:
+        feat.scaleFactor.expression = param_name
+        log.append("{} bound to '{}'".format(label, param_name))
+    except Exception as exc:
+        log.append(
+            "{}: Scale feature created but NOT bound to '{}' ({}) — "
+            "link it by editing the feature's scale value".format(
+                label, param_name, exc
+            )
+        )
+    return feat
+
+
 def _apply_knot_scale(design, comp, sketches, log):
     """Scale feature over the knot's geometry sketches, driven by the
     'knotScale' user parameter — edit the parameter later and the path,
@@ -745,14 +777,9 @@ def _apply_knot_scale(design, comp, sketches, log):
             coll.add(s)
         if coll.count == 0:
             return
-        sin = comp.features.scaleFeatures.createInput(
-            coll, comp.originConstructionPoint,
-            adsk.core.ValueInput.createByString("knotScale"),
-        )
-        comp.features.scaleFeatures.add(sin)
-        log.append(
-            "knot scale bound to user parameter 'knotScale' "
-            "({} sketches)".format(coll.count)
+        _add_scale_feature(
+            comp, coll, comp.originConstructionPoint, "knotScale", 1.0,
+            log, "knot scale ({} sketches)".format(coll.count),
         )
     except Exception as exc:
         log.append("knotScale feature failed: {}".format(exc))
