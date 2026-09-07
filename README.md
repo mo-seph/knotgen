@@ -95,7 +95,7 @@ Every `gen` prints:
 
 If `--tube` fails the check, nothing is exported and the message says which knob to turn (usually `--depth`, `--width`, or `--tightness`).
 
-When no combination of knobs works, add **`--relax`**: an opt-in optimisation pass (strand repulsion + bend relief, in the spirit of ideal-knot tightening in reverse) that redistributes space at fixed overall size until the requested tube fits. It's topology-safe (every step is capped well below the current strand gap, so strands can't pass through each other — the crossing diagram is verified unchanged in tests), preserves exact n-fold symmetry via spectral projection, prints progress every few iterations, and **returns the best state seen — never worse than your original layout**. It stops early when progress plateaus and reports the tube size the layout tops out at. Companions: `--relax-max-depth MM` keeps the design within a z budget while relaxing (wall/slab pieces); `--relax-max` grinds much harder before giving up. Without `--relax`, layouts are exactly as designed. (It can't rescue a deliberately crushed `--depth` on a fully-3D ideal conformation — give those their natural depth.) Note that a non-circular profile needs clearance for its *diagonal*, not its width — re-check with `knotgen check file.json --tube <diagonal>`.
+When no combination of knobs works, add **`--relax`**: an opt-in optimisation pass (strand repulsion + bend relief, in the spirit of ideal-knot tightening in reverse) that redistributes space at fixed overall size until the requested tube fits. It's topology-safe (every step is capped well below the current strand gap, so strands can't pass through each other — the crossing diagram is verified unchanged in tests), preserves exact n-fold symmetry via spectral projection, prints progress every few iterations, and **returns the best state seen — never worse than your original layout**. It stops early when progress plateaus and reports the tube size the layout tops out at. Effort is steered automatically toward whichever constraint is binding — gap-limited knots get more repulsion, curvature-limited ones get more un-kinking (plus a curve-shortening flow), and the progress lines say which regime you're in. Companions: `--relax-max-depth MM` keeps the design within a z budget while relaxing (wall/slab pieces); `--relax-max` grinds much harder before giving up; `--relax-iterations N` caps the budget (default 150, rarely reached). Without `--relax`, layouts are exactly as designed. (It can't rescue a deliberately crushed `--depth` on a fully-3D ideal conformation — give those their natural depth.) Note that a non-circular profile needs clearance for its *diagonal*, not its width — re-check with `knotgen check file.json --tube <diagonal>`.
 
 ## LED strip surfaces
 
@@ -120,7 +120,13 @@ uv run knotgen 5_1 --width 300 --depth 25 --strip 10 --follow 0.6 --twist-smooth
 | `--twist-smooth MM` | arc-length scale of twist-rate smoothing (0 = off, default 5) |
 | `--frame-count N` | control lines exported for the editable Fusion mode (default 25) |
 
-The preview shows the ribbon coloured by **edgewise curvature** (the kind the strip resists) with LED direction arrows; `gen` prints max twist (deg/cm), min edgewise bend radius, and min in-plane bend radius (compare with your strip's rated bend radius).
+The preview shows the ribbon with LED direction arrows, in one of three colourings (buttons in the window, or keys `1`/`2`/`3`): **edgewise curvature** (the kind the strip resists — the default), **total curvature**, and **sides** (blue = LED face, yellow = back — rotate the model and any yellow facing you is strip showing its back). `gen` prints max twist (deg/cm), min edgewise bend radius, and min in-plane bend radius (compare with your strip's rated bend radius).
+
+## The 3D viewer
+
+`--preview` opens an interactive matplotlib window; `--save-png FILE` renders the same view to a file, and `--clean` strips it down to a beauty shot (no axes, colorbars or markers, autocropped) for documentation.
+
+Controls: **drag** rotates, **scroll / two-finger drag** zooms. Keys: `t` toggles the axis triad (Fusion colours, X red / Y green / Z blue), `m` toggles the green **start markers** (where the path begins — also where the sweep seam, connector 1 and Segment 1 sit, with an arrow showing the direction the numbering runs), `g` toggles the axes/grid, `1`/`2`/`3` switch strip colourings, and `q` / **Cmd-Q** closes the window. Red vertical lines mark crossings on flat (2.5D) designs.
 
 In Fusion, KnotImport then offers the surface two ways:
 
