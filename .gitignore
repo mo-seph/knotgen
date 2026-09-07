@@ -6,4 +6,5 @@ dist/
 .pytest_cache/
 output/
 *.png
+!docs/images/*.png
 /*.json

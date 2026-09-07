@@ -11,6 +11,27 @@ Coverage:
 
 Aesthetics: Fremlin (≤8 crossings) and the parametric families are symmetric and 2.5D-flat by construction. The ideal 9–11-crossing/link data is an organic "pulled-rope" look — not symmetrised; negative `--tightness` doubles as a smoother for it.
 
+## Gallery
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/pentafoil.png" alt="Pentafoil (5_1) with LED strip ribbon"/><br/>
+<b>Pentafoil (5₁)</b> with the LED-strip ribbon, coloured by edgewise strain<br/>
+<code>knotgen 5_1 --width 300 --depth 25 --tightness -0.4 --strip 10 --follow 0.7</code></td>
+<td width="50%"><img src="docs/images/8_2.png" alt="8_2 knot with strip, LEDs facing down"/><br/>
+<b>8₂</b> with strip frames solved for downward-facing LEDs<br/>
+<code>knotgen 8_2 --width 300 --depth 30 --tightness 0.3 --strip 10 --follow 0.3 --light-dir down</code></td>
+</tr>
+<tr>
+<td><img src="docs/images/11a2.png" alt="11a2 ideal conformation"/><br/>
+<b>11a2</b> — a tightened "ideal" conformation, genuinely 3D (auto depth keeps its proportions)<br/>
+<code>knotgen 11a2 --width 300</code></td>
+<td><img src="docs/images/w37_racetrack.png" alt="W(3,7) racetrack braid with split crossings"/><br/>
+<b>W(3,7)</b> as a racetrack braid closure, crossings woven along both straights, 12&nbsp;mm tube preview<br/>
+<code>knotgen "W(3,7)" --layout racetrack --braid-split 0.5 --width 600 --aspect 3 --braid-fraction 0.9 --lane-gap 0.22 --depth 16 --tube 12</code></td>
+</tr>
+</table>
+
 ## Quick start
 
 ```bash
