@@ -33,6 +33,7 @@ CLEARANCE_SAFETY = 1.15  # target gap = tube * this
 BEND_SAFETY = 1.15  # target bend radius = tube/2 * this
 REPULSE_GAIN = 0.35
 BEND_GAIN = 0.25
+LAPLACE_GAIN = 0.8
 
 
 def _symmetry_projection(knot: FourierKnot, n: int) -> FourierKnot:
@@ -165,6 +166,16 @@ def relax(
 
         # exclusion window per comp: half-turn at the current tightest bend
         kmax, _ = max_curvature(work)
+        cur_gap, _, _ = min_clearance(work)
+
+        # steer effort toward the BINDING constraint: a bend-limited knot
+        # gets more un-kinking and less (interfering) repulsion, and vice
+        # versa. balance > 0 means bend is the limiting factor.
+        r_gap = cur_gap / target_gap
+        r_bend = (1.0 / kmax) / target_bend
+        balance = float(np.clip(r_gap - r_bend, -1.0, 1.0))
+        repulse_scale = 1.0 + 2.0 * max(0.0, -balance)
+        bend_scale = 1.0 + 3.0 * max(0.0, balance)
         w_idx = []
         for ci, comp in enumerate(comps):
             L = comp.total_length()
@@ -187,7 +198,8 @@ def relax(
                 d = P[i] - P[jj]
                 dist = np.linalg.norm(d, axis=1)
                 dist = np.maximum(dist, 1e-9)
-                push_f = (REPULSE_GAIN * (target_gap - dist) / dist)[:, None] * d
+                push_f = (repulse_scale * REPULSE_GAIN
+                          * (target_gap - dist) / dist)[:, None] * d
                 np.add.at(F, i, push_f)
                 np.add.at(F, jj, -push_f)
 
@@ -206,8 +218,15 @@ def relax(
             if hot.any():
                 khat = kv[hot] / kappa[hot, None]
                 F[off:off + per_comp[ci]][hot] -= (
-                    BEND_GAIN * target_bend**2 * excess[hot, None] * khat
+                    bend_scale * BEND_GAIN * target_bend**2
+                    * excess[hot, None] * khat
                 )
+            # curve-shortening (Laplacian) flow, only when bend-limited:
+            # the most direct un-kinker, at the cost of a little length
+            if balance > 0.0:
+                Pc = P[off:off + per_comp[ci]]
+                lap = 0.5 * (np.roll(Pc, 1, axis=0) + np.roll(Pc, -1, axis=0)) - Pc
+                F[off:off + per_comp[ci]] += LAPLACE_GAIN * balance * lap
             off += per_comp[ci]
 
         # smooth the force field per component at the tube scale
@@ -220,7 +239,6 @@ def relax(
             off += n_i
 
         # topology-safe step cap: never move more than 1/4 of the current gap
-        cur_gap, _, _ = min_clearance(work)
         max_move = np.linalg.norm(F, axis=1).max()
         if max_move < 1e-9:
             done_at = it
@@ -256,7 +274,9 @@ def relax(
             check = FourierLink(components=comps, name=link.name, meta=link.meta)
             s, g, br = score_of(check)
             if verbose:
-                print(f"    relax {it:3d}: gap {g:6.1f} mm, bend r {br:6.1f} mm")
+                limiter = "bend" if br / target_bend < g / target_gap else "gap"
+                print(f"    relax {it:3d}: gap {g:6.1f} mm, bend r {br:6.1f} mm "
+                      f"({limiter}-limited)")
             if s > best_score + 0.003:
                 best_score, best_gap, best_bend = s, g, br
                 best_comps = list(comps)
