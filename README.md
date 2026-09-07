@@ -26,8 +26,8 @@ Aesthetics: Fremlin (≤8 crossings) and the parametric families are symmetric a
 </tr>
 <tr>
 <td><img src="docs/images/11a2.png" alt="11a2 ideal conformation"/><br/>
-<b>11a2</b> — a tightened "ideal" conformation, genuinely 3D (auto depth keeps its proportions)<br/>
-<code>knotgen 11a2 --width 300</code></td>
+<b>11a2</b> — a tightened "ideal" conformation, genuinely 3D (auto depth keeps its proportions), with a 24&nbsp;mm tube<br/>
+<code>knotgen 11a2 --width 300 --tube 24</code></td>
 <td><img src="docs/images/w37_racetrack.png" alt="W(3,7) racetrack braid with split crossings"/><br/>
 <b>W(3,7)</b> as a racetrack braid closure, crossings woven along both straights, 12&nbsp;mm tube preview<br/>
 <code>knotgen "W(3,7)" --layout racetrack --braid-split 0.5 --width 600 --aspect 3 --braid-fraction 0.9 --lane-gap 0.22 --depth 16 --tube 12</code></td>
