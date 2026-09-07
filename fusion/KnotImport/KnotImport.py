@@ -712,7 +712,11 @@ def _add_labels(comp, placed, label_point, prefix, height_cm, depth_cm,
 # ------------------------------------------------------- user parameters
 
 def _ensure_param(design, name, value, comment):
-    """Create (or update) a unitless user parameter."""
+    """Create (or update) a unitless user parameter.
+
+    Note: UserParameters.add rejects ValueInput.createByReal with
+    'invalid expression' — the value must be a STRING expression.
+    """
     p = design.userParameters.itemByName(name)
     if p:
         try:
@@ -721,7 +725,9 @@ def _ensure_param(design, name, value, comment):
             pass
         return p
     return design.userParameters.add(
-        name, adsk.core.ValueInput.createByReal(value), "", comment
+        name,
+        adsk.core.ValueInput.createByString("{:g}".format(value)),
+        "", comment,
     )
 
 
