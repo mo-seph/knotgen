@@ -40,6 +40,30 @@ def _parallel_transport_frames(points: np.ndarray) -> tuple[np.ndarray, np.ndarr
             + np.cross(k, nrm) * np.sin(angle)
             + k * np.dot(k, nrm) * (1 - np.cos(angle))
         )
+    # close the loop: transport the last normal across the wrap and spread
+    # the residual holonomy angle along the curve, so the tube's final ring
+    # meets the first without a twist pinch at the seam
+    v = np.cross(tangents[-1], tangents[0])
+    s = np.linalg.norm(v)
+    n_wrap = normals[-1]
+    if s > 1e-12:
+        k = v / s
+        angle = np.arctan2(s, np.dot(tangents[-1], tangents[0]))
+        n_wrap = (
+            n_wrap * np.cos(angle)
+            + np.cross(k, n_wrap) * np.sin(angle)
+            + k * np.dot(k, n_wrap) * (1 - np.cos(angle))
+        )
+    b0 = np.cross(tangents[0], normals[0])
+    holonomy = np.arctan2(np.dot(n_wrap, b0), np.dot(n_wrap, normals[0]))
+    corr = -holonomy * np.arange(n) / n
+    for i in range(1, n):
+        c, sn = np.cos(corr[i]), np.sin(corr[i])
+        t_i = tangents[i]
+        nrm = normals[i]
+        normals[i] = (
+            nrm * c + np.cross(t_i, nrm) * sn + t_i * np.dot(t_i, nrm) * (1 - c)
+        )
     binormals = np.cross(tangents, normals)
     return normals, binormals
 
@@ -171,9 +195,11 @@ def preview(
     tube_artists = []
     if tube_diameter:
         for _, pts in sampled:
-            # decimate: opaque shaded tubes get heavy to rotate at full res
-            step = max(len(pts) // 600, 1)
-            X, Y, Z = _tube_mesh(pts[::step], tube_diameter / 2.0, sides=24)
+            # decimate evenly (keeps the wrap segment the same size as
+            # the rest); opaque shaded tubes get heavy at full res
+            n_keep = min(len(pts), 600)
+            sel = np.linspace(0, len(pts), n_keep, endpoint=False).astype(int)
+            X, Y, Z = _tube_mesh(pts[sel], tube_diameter / 2.0, sides=24)
             surf = ax.plot_surface(
                 X, Y, Z, color="#e8934a", linewidth=0, antialiased=False,
                 shade=True, rcount=X.shape[0], ccount=X.shape[1],
@@ -406,14 +432,14 @@ def preview(
                     ("sides", lambda: set_mode("sides")),
                 ]
             entries += [
-                ("triad [t]", lambda: toggle(groups["triad"])),
+                ("origin [t]", lambda: toggle(groups["triad"])),
                 ("start [m]", lambda: toggle(groups["start"])),
             ]
             if tube_artists:
                 entries.append(("tube [p]", lambda: toggle(tube_artists)))
             if arrow_artists:
                 entries.append(("normals [n]", lambda: toggle(arrow_artists)))
-            entries.append(("axes [g]", toggle_axes))
+            entries.append(("grid [g]", toggle_axes))
 
             buttons = []
             x = 0.01
@@ -439,7 +465,7 @@ def preview(
             )
 
         help_line = ("viewer: scroll = zoom, drag = rotate | buttons or keys: "
-                     "[t]riad, [m] start, [p] tube, [n]ormals, [g] axes, [q]uit")
+                     "[t] origin, [m] start, [p] tube, [n]ormals, [g] grid, [q]uit")
         if strips:
             help_line += " | strip colours: [1] curvature, [2] edgewise, [3] sides (blue=LED face, yellow=back)"
         print(help_line)
