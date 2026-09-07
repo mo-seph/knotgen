@@ -107,6 +107,24 @@ def preview(
     fig = plt.figure(figsize=(9, 9))
     ax = fig.add_subplot(projection="3d")
 
+    # dark theme for the working viewer; --clean stays white (beauty shots,
+    # and the autocrop keys on white margins)
+    dark = not clean
+    fg = "#d8d8d8" if dark else "black"
+    arrow_colour = "#e8e8e8" if dark else "black"
+    if dark:
+        bg = "#15171c"
+        fig.patch.set_facecolor(bg)
+        ax.set_facecolor(bg)
+        for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+            try:
+                axis.set_pane_color((0.11, 0.12, 0.15, 1.0))
+                axis.label.set_color(fg)
+                axis._axinfo["grid"]["color"] = (1.0, 1.0, 1.0, 0.12)
+            except Exception:
+                pass
+        ax.tick_params(colors="#8a8a8a")
+
     if multi:
         # solid colour per component beats curvature shading for links
         palette = plt.get_cmap("tab10").colors
@@ -127,7 +145,9 @@ def preview(
         ax.add_collection3d(lc)
         if not clean:
             cbar = fig.colorbar(lc, ax=ax, shrink=0.6, pad=0.1)
-            cbar.set_label("curvature (1/mm)")
+            cbar.set_label("curvature (1/mm)", color=fg)
+            cbar.ax.tick_params(colors=fg)
+            cbar.outline.set_edgecolor(fg)
     else:
         ax.plot(*all_closed[0].T, lw=2.5)
     closed = np.vstack(all_closed)
@@ -148,10 +168,18 @@ def preview(
             alpha=0.6,
         )
 
-    if tube_diameter and not strips:
+    tube_artists = []
+    if tube_diameter:
         for _, pts in sampled:
-            X, Y, Z = _tube_mesh(pts, tube_diameter / 2.0)
-            ax.plot_surface(X, Y, Z, color="tab:orange", alpha=0.25, linewidth=0)
+            # decimate: opaque shaded tubes get heavy to rotate at full res
+            step = max(len(pts) // 400, 1)
+            X, Y, Z = _tube_mesh(pts[::step], tube_diameter / 2.0)
+            surf = ax.plot_surface(
+                X, Y, Z, color="#e8934a", linewidth=0, antialiased=False,
+                shade=True, rcount=X.shape[0], ccount=X.shape[1],
+            )
+            surf.set_visible(not strips)  # hidden by default under a strip
+            tube_artists.append(surf)
 
     ribbon_modes: dict[str, list] = {
         "edgewise": [], "curvature": [], "sides": []
@@ -221,14 +249,17 @@ def preview(
                     [p[0], p[0] + arrow * nrm[0]],
                     [p[1], p[1] + arrow * nrm[1]],
                     [p[2], p[2] + arrow * nrm[2]],
-                    color="black", lw=0.8, alpha=0.7,
+                    color=arrow_colour, lw=0.8, alpha=0.7,
                 )
         if not clean:
             sm = plt.cm.ScalarMappable(
                 cmap=cmap_e, norm=plt.Normalize(vmin=0.0, vmax=vmax_e)
             )
             cb2 = fig.colorbar(sm, ax=ax, shrink=0.5, pad=0.02, location="left")
-            cb2.set_label("strip edgewise curvature (1/mm) — lower is kinder")
+            cb2.set_label("strip edgewise curvature (1/mm) — lower is kinder",
+                          color=fg)
+            cb2.ax.tick_params(colors=fg)
+            cb2.outline.set_edgecolor(fg)
 
     # ---- orientation aids (toggleable) -----------------------------------
     lims = np.array([closed.min(axis=0), closed.max(axis=0)])
@@ -252,6 +283,8 @@ def preview(
             (ln,) = ax.plot([0, d[0]], [0, d[1]], [0, d[2]], color=colour, lw=2)
             txt = ax.text(d[0] * 1.1, d[1] * 1.1, d[2] * 1.1, label_txt,
                           color=colour, fontsize=10, weight="bold")
+            ln.set_visible(False)
+            txt.set_visible(False)
             groups["triad"] += [ln, txt]
         # path start + direction per component (this is where the sweep seam and
         # connector 1 sit — compare against Fusion before committing)
@@ -266,6 +299,9 @@ def preview(
             )
             txt = ax.text(*(p0 + d0 * 1.3), f"start c{ci + 1}",
                           color="limegreen", fontsize=9)
+            dot.set_visible(False)
+            arrow.set_visible(False)
+            txt.set_visible(False)
             groups["start"] += [dot, arrow, txt]
 
     # equal aspect + minimal whitespace
@@ -279,7 +315,7 @@ def preview(
     if clean:
         ax.set_axis_off()
     else:
-        ax.set_title(title or knot.name, y=0.99)
+        ax.set_title(title or knot.name, y=0.99, color=fg)
     # reserve a sliver at the bottom for the colour-mode buttons when a strip
     # is shown — if the 3D axes overlaps them, interactive rotation repaints
     # the axes over the buttons and they vanish after the first drag
@@ -294,7 +330,7 @@ def preview(
     if show:
         # free our shortcut keys from matplotlib's default bindings
         # (e.g. 's' is Save, 'g' is grid — they'd fire alongside ours)
-        our_keys = {"t", "m", "g", "1", "2", "3"}
+        our_keys = {"t", "m", "g", "p", "1", "2", "3"}
         for param in list(plt.rcParams):
             if param.startswith("keymap."):
                 for k in our_keys & set(plt.rcParams[param]):
@@ -337,6 +373,10 @@ def preview(
                 else:
                     ax.set_axis_off()
                 fig.canvas.draw_idle()
+            elif event.key == "p" and tube_artists:
+                for artist in tube_artists:
+                    artist.set_visible(not artist.get_visible())
+                fig.canvas.draw_idle()
             elif event.key in ("cmd+q", "ctrl+q", "q"):
                 plt.close(fig)
 
@@ -344,7 +384,7 @@ def preview(
         fig.canvas.mpl_connect("key_press_event", on_key)
 
         help_line = ("viewer: scroll = zoom, drag = rotate | keys: [t]riad, "
-                     "[m] start markers, [g] axes on/off")
+                     "[m] start markers, [g] axes, [p] tube, [q]uit")
         if strips:
             from matplotlib.widgets import Button
 

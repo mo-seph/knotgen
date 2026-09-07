@@ -124,9 +124,9 @@ The preview shows the ribbon with LED direction arrows, in one of three colourin
 
 ## The 3D viewer
 
-`--preview` opens an interactive matplotlib window; `--save-png FILE` renders the same view to a file, and `--clean` strips it down to a beauty shot (no axes, colorbars or markers, autocropped) for documentation.
+`--preview` opens an interactive matplotlib window (dark theme); `--save-png FILE` renders the same view to a file, and `--clean` strips it down to a white-background beauty shot (no axes, colorbars or markers, autocropped) for documentation.
 
-Controls: **drag** rotates, **scroll / two-finger drag** zooms. Keys: `t` toggles the axis triad (Fusion colours, X red / Y green / Z blue), `m` toggles the green **start markers** (where the path begins — also where the sweep seam, connector 1 and Segment 1 sit, with an arrow showing the direction the numbering runs), `g` toggles the axes/grid, `1`/`2`/`3` switch strip colourings, and `q` / **Cmd-Q** closes the window. Red vertical lines mark crossings on flat (2.5D) designs.
+Controls: **drag** rotates, **scroll / two-finger drag** zooms. Keys: `t` shows the axis triad (Fusion colours, X red / Y green / Z blue; off by default), `m` shows the green **start markers** (where the path begins — also where the sweep seam, connector 1 and Segment 1 sit, with an arrow showing the direction the numbering runs; off by default), `p` toggles the opaque shaded **tube** (drawn whenever `--tube` is given; hidden by default when a strip is shown), `g` toggles the axes/grid, `1`/`2`/`3` switch strip colourings, and `q` / **Cmd-Q** closes the window. Red vertical lines mark crossings on flat (2.5D) designs.
 
 In Fusion, KnotImport then offers the surface two ways:
 
