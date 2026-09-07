@@ -170,6 +170,9 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--save-png", default=None, metavar="FILE",
                      help="save the preview as a PNG instead of opening a window "
                           "(bare filenames go into output/)")
+    gen.add_argument("--clean", action="store_true",
+                     help="beauty-shot mode: no axes, colorbars, markers or "
+                          "orientation aids — just the knot")
 
     lst = sub.add_parser(
         "list",
@@ -208,6 +211,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="overlay a translucent tube of this diameter")
     prv.add_argument("--save-png", default=None, metavar="FILE",
                      help="save the preview as a PNG instead of opening a window")
+    prv.add_argument("--clean", action="store_true",
+                     help="beauty-shot mode: no axes, colorbars, markers or "
+                          "orientation aids")
 
     idf = sub.add_parser(
         "identify",
@@ -421,6 +427,7 @@ def cmd_gen(args: argparse.Namespace) -> int:
             strip_width=args.strip,
             save=str(_resolve_out(args.save_png)) if args.save_png else None,
             show=args.preview,
+            clean=args.clean,
             title=f"{styled.name}  {e['x_extent']:.0f}x{e['y_extent']:.0f}x{e['z_extent']:.0f}mm",
         )
 
@@ -514,6 +521,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
         strip_width=strip_width,
         save=args.save_png,
         show=not args.save_png,
+        clean=args.clean,
     )
     return 0
 

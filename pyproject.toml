@@ -3,6 +3,8 @@ name = "knotgen"
 version = "0.1.0"
 description = "Generate mathematical knots as closed 3D curves for Fusion 360 (knot lamps)"
 readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Dave Murray-Rust" }]
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",

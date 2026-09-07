@@ -61,6 +61,24 @@ def _tube_mesh(
     return surf[..., 0], surf[..., 1], surf[..., 2]
 
 
+def _autocrop(path: str, pad: int = 24) -> None:
+    """Trim white margins from a saved PNG (clean mode leaves the invisible
+    3D axes' full extent as border)."""
+    import matplotlib.pyplot as plt
+
+    img = plt.imread(path)
+    content = (img[..., :3] < 0.99).any(axis=2)
+    rows = np.flatnonzero(content.any(axis=1))
+    cols = np.flatnonzero(content.any(axis=0))
+    if len(rows) == 0 or len(cols) == 0:
+        return
+    r0 = max(rows[0] - pad, 0)
+    r1 = min(rows[-1] + pad, img.shape[0] - 1)
+    c0 = max(cols[0] - pad, 0)
+    c1 = min(cols[-1] + pad, img.shape[1] - 1)
+    plt.imsave(path, img[r0 : r1 + 1, c0 : c1 + 1])
+
+
 def preview(
     knot,  # FourierKnot | FourierLink
     *,
@@ -72,6 +90,7 @@ def preview(
     show: bool = True,
     samples: int = 800,
     title: str | None = None,
+    clean: bool = False,
 ) -> None:
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
@@ -96,7 +115,8 @@ def preview(
                 *closed_pts.T, lw=2.5, color=palette[ci % len(palette)],
                 label=f"component {ci + 1}",
             )
-        ax.legend(loc="upper left", fontsize=8)
+        if not clean:
+            ax.legend(loc="upper left", fontsize=8)
     elif color_by == "curvature":
         t, _ = sampled[0]
         closed_pts = all_closed[0]
@@ -105,8 +125,9 @@ def preview(
         lc = Line3DCollection(segs, cmap="viridis", linewidths=2.5)
         lc.set_array(kappa)
         ax.add_collection3d(lc)
-        cbar = fig.colorbar(lc, ax=ax, shrink=0.6, pad=0.1)
-        cbar.set_label("curvature (1/mm)")
+        if not clean:
+            cbar = fig.colorbar(lc, ax=ax, shrink=0.6, pad=0.1)
+            cbar.set_label("curvature (1/mm)")
     else:
         ax.plot(*all_closed[0].T, lw=2.5)
     closed = np.vstack(all_closed)
@@ -116,7 +137,8 @@ def preview(
     # conformation the xy projection is arbitrary and the markers are noise.
     e = link.extents(samples=1024)
     is_flat = e["xy_diameter"] > 0 and e["z_extent"] / e["xy_diameter"] <= 0.35
-    for c in crossings_xy(knot, samples=min(2048, samples * 2)) if is_flat else []:
+    show_crossings = is_flat and not clean
+    for c in crossings_xy(knot, samples=min(2048, samples * 2)) if show_crossings else []:
         ax.plot(
             [c.xy[0], c.xy[0]],
             [c.xy[1], c.xy[1]],
@@ -201,11 +223,12 @@ def preview(
                     [p[2], p[2] + arrow * nrm[2]],
                     color="black", lw=0.8, alpha=0.7,
                 )
-        sm = plt.cm.ScalarMappable(
-            cmap=cmap_e, norm=plt.Normalize(vmin=0.0, vmax=vmax_e)
-        )
-        cb2 = fig.colorbar(sm, ax=ax, shrink=0.5, pad=0.02, location="left")
-        cb2.set_label("strip edgewise curvature (1/mm) — lower is kinder")
+        if not clean:
+            sm = plt.cm.ScalarMappable(
+                cmap=cmap_e, norm=plt.Normalize(vmin=0.0, vmax=vmax_e)
+            )
+            cb2 = fig.colorbar(sm, ax=ax, shrink=0.5, pad=0.02, location="left")
+            cb2.set_label("strip edgewise curvature (1/mm) — lower is kinder")
 
     # ---- orientation aids (toggleable) -----------------------------------
     lims = np.array([closed.min(axis=0), closed.max(axis=0)])
@@ -214,31 +237,36 @@ def preview(
 
     groups: dict[str, list] = {"triad": [], "start": []}
     # axis triad at the origin, Fusion colours: X red, Y green, Z blue (up)
-    tri_len = 0.45 * half
-    for axis_dir, colour, label_txt in (
-        ((1, 0, 0), "red", "X"),
-        ((0, 1, 0), "green", "Y"),
-        ((0, 0, 1), "blue", "Z up"),
-    ):
-        d = np.array(axis_dir) * tri_len
-        (ln,) = ax.plot([0, d[0]], [0, d[1]], [0, d[2]], color=colour, lw=2)
-        txt = ax.text(d[0] * 1.1, d[1] * 1.1, d[2] * 1.1, label_txt,
-                      color=colour, fontsize=10, weight="bold")
-        groups["triad"] += [ln, txt]
-    # path start + direction per component (this is where the sweep seam and
-    # connector 1 sit — compare against Fusion before committing)
-    for ci, (_, pts) in enumerate(sampled):
-        p0 = pts[0]
-        d0 = pts[1] - pts[0]
-        d0 = d0 / np.linalg.norm(d0) * 0.18 * half
-        dot = ax.scatter(*p0, color="limegreen", s=60, depthshade=False)
-        (arrow,) = ax.plot(
-            [p0[0], p0[0] + d0[0]], [p0[1], p0[1] + d0[1]],
-            [p0[2], p0[2] + d0[2]], color="limegreen", lw=3,
-        )
-        txt = ax.text(*(p0 + d0 * 1.3), f"start c{ci + 1}",
-                      color="limegreen", fontsize=9)
-        groups["start"] += [dot, arrow, txt]
+    if clean:
+        decorate = False
+    else:
+        decorate = True
+    if decorate:
+        tri_len = 0.45 * half
+        for axis_dir, colour, label_txt in (
+            ((1, 0, 0), "red", "X"),
+            ((0, 1, 0), "green", "Y"),
+            ((0, 0, 1), "blue", "Z up"),
+        ):
+            d = np.array(axis_dir) * tri_len
+            (ln,) = ax.plot([0, d[0]], [0, d[1]], [0, d[2]], color=colour, lw=2)
+            txt = ax.text(d[0] * 1.1, d[1] * 1.1, d[2] * 1.1, label_txt,
+                          color=colour, fontsize=10, weight="bold")
+            groups["triad"] += [ln, txt]
+        # path start + direction per component (this is where the sweep seam and
+        # connector 1 sit — compare against Fusion before committing)
+        for ci, (_, pts) in enumerate(sampled):
+            p0 = pts[0]
+            d0 = pts[1] - pts[0]
+            d0 = d0 / np.linalg.norm(d0) * 0.18 * half
+            dot = ax.scatter(*p0, color="limegreen", s=60, depthshade=False)
+            (arrow,) = ax.plot(
+                [p0[0], p0[0] + d0[0]], [p0[1], p0[1] + d0[1]],
+                [p0[2], p0[2] + d0[2]], color="limegreen", lw=3,
+            )
+            txt = ax.text(*(p0 + d0 * 1.3), f"start c{ci + 1}",
+                          color="limegreen", fontsize=9)
+            groups["start"] += [dot, arrow, txt]
 
     # equal aspect + minimal whitespace
     ax.set_xlim(center[0] - half, center[0] + half)
@@ -248,7 +276,10 @@ def preview(
     ax.set_xlabel("x (mm)")
     ax.set_ylabel("y (mm)")
     ax.set_zlabel("z (mm)")
-    ax.set_title(title or knot.name, y=0.99)
+    if clean:
+        ax.set_axis_off()
+    else:
+        ax.set_title(title or knot.name, y=0.99)
     # reserve a sliver at the bottom for the colour-mode buttons when a strip
     # is shown — if the 3D axes overlaps them, interactive rotation repaints
     # the axes over the buttons and they vanish after the first drag
@@ -258,6 +289,8 @@ def preview(
 
     if save:
         fig.savefig(save, dpi=150, bbox_inches="tight")
+        if clean:
+            _autocrop(save)
     if show:
         # free our shortcut keys from matplotlib's default bindings
         # (e.g. 's' is Save, 'g' is grid — they'd fire alongside ours)

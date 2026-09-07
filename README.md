@@ -1,5 +1,7 @@
 # knotgen
 
+> **Note**: this codebase was almost entirely written by an AI (Anthropic's Claude), working under human direction — the design decisions, requirements and testing-in-anger are human, the code is machine-generated. Read it with that in mind. MIT licensed ([LICENSE](LICENSE)).
+
 Generate mathematical knots and links as closed 3D curves, preview them, sanity-check them against a tube diameter, and import them into Fusion 360 as continuous sweepable paths.
 
 Made for knot lamps: generate the knot here, sweep the LED-diffuser-channel profile in Fusion.
