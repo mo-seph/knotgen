@@ -58,7 +58,8 @@ Then in Fusion: **Utilities → Add-Ins → Scripts (Shift+S) → KnotImport** �
 ## Folders & reproducibility
 
 - `output/` — default landing spot: a bare `--out lamp.json` or `--save-png x.png` goes here. Git-ignored scratch space.
-- `designs/` — move the keepers here; it's tracked in git, so finished lamp designs are versioned.
+- `designs/` — move your keepers here; also git-ignored, so personal lamp designs stay out of the repo.
+- `examples/` — shipped sample designs, documented in **[EXAMPLES.md](EXAMPLES.md)** — importable into Fusion as-is.
 - Every export records the exact command that made it (`"command"` field) and all parsed options (`"cli_options"`), so any JSON can be regenerated or tweaked later even if you've forgotten the recipe.
 
 ## Commands

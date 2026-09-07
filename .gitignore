@@ -4,7 +4,10 @@ __pycache__/
 dist/
 *.egg-info/
 .pytest_cache/
-output/
+output/*
+!output/.gitkeep
+designs/*
+!designs/.gitkeep
 *.png
 !docs/images/*.png
 /*.json
