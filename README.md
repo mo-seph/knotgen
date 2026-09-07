@@ -93,7 +93,9 @@ Every `gen` prints:
 - **min strand gap** — closest approach between different strands; the tube diameter must fit inside it,
 - **max tube diameter** — the binding constraint of the two, with safety factors.
 
-If `--tube` fails the check, nothing is exported and the message says which knob to turn (usually `--depth`, `--width`, or `--tightness`). Note that a non-circular profile needs clearance for its *diagonal*, not its width — re-check with `knotgen check file.json --tube <diagonal>`.
+If `--tube` fails the check, nothing is exported and the message says which knob to turn (usually `--depth`, `--width`, or `--tightness`).
+
+When no combination of knobs works, add **`--relax`**: an opt-in optimisation pass (strand repulsion + bend relief, in the spirit of ideal-knot tightening in reverse) that redistributes space at fixed overall size until the requested tube fits. It's topology-safe (every step is capped well below the current strand gap, so strands can't pass through each other — the crossing diagram is verified unchanged in tests), preserves exact n-fold symmetry via spectral projection, and reports before/after clearance and bend radius. Without the flag, layouts are exactly as designed. Note that a non-circular profile needs clearance for its *diagonal*, not its width — re-check with `knotgen check file.json --tube <diagonal>`.
 
 ## LED strip surfaces
 

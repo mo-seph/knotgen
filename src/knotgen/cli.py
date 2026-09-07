@@ -127,6 +127,13 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--tube", type=float, default=None, metavar="MM",
                      help="intended tube/profile diameter: refuses to export if it would "
                           "self-intersect, and enables the Pipe preview offer in Fusion")
+    gen.add_argument("--relax", action="store_true",
+                     help="open up clearance for the requested --tube: iterative strand "
+                          "repulsion + bend relief at fixed overall size, topology-safe "
+                          "(steps capped below the strand gap), exact symmetry preserved. "
+                          "Opt-in — layouts are untouched without it")
+    gen.add_argument("--relax-iterations", type=int, default=150, metavar="N",
+                     help="max relaxation iterations (default 150)")
     gen.add_argument("--fit-points", type=int, default=60, metavar="N",
                      help="points for the editable fitted-spline representation in the "
                           "export (default 60)")
@@ -267,6 +274,21 @@ def cmd_gen(args: argparse.Namespace) -> int:
         depth=args.depth,
         tightness=args.tightness,
     )
+    if args.relax:
+        if args.tube is None:
+            print("--relax needs --tube (the diameter to open clearance for)")
+            return 1
+        from knotgen.relax import relax
+
+        print(f"  relaxing for a {args.tube:g} mm tube "
+              f"(max {args.relax_iterations} iterations)...")
+        styled, info = relax(
+            styled, tube=args.tube, iterations=args.relax_iterations
+        )
+        print(f"  relaxed in {info['iterations']} iterations: "
+              f"strand gap {info['gap_before']:g} -> {info['gap_after']:g} mm, "
+              f"bend radius {info['bend_before']:g} -> {info['bend_after']:g} mm")
+
     if args.wall:
         from knotgen.transforms import floor_z
 
