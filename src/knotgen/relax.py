@@ -102,9 +102,20 @@ def relax(
     design: FourierKnot | FourierLink,
     tube: float,
     iterations: int = 150,
+    max_depth: float | None = None,
+    push: bool = False,
     verbose: bool = False,
 ) -> tuple[FourierKnot | FourierLink, dict]:
-    """Return (relaxed design, info). Sizes in mm; run AFTER apply_style."""
+    """Return (relaxed design, info). Sizes in mm; run AFTER apply_style.
+
+    Returns the BEST state seen (scored by the binding constraint: the worse
+    of strand-gap and bend-radius relative to their targets), with the input
+    itself as the first candidate — so the result is never worse than the
+    original layout. Stops early once progress plateaus.
+
+    max_depth: keep the design's z extent within this budget (mm) while
+    relaxing. push: grind much harder (more iterations, more patience).
+    """
     from knotgen.geometry import max_curvature, min_clearance
 
     single = isinstance(design, FourierKnot)
@@ -132,6 +143,19 @@ def relax(
         harmonics.append(h)
 
     comps = list(link.components)
+    if push:
+        iterations = max(iterations, 600)
+    patience = 6 if push else 3
+
+    def score_of(candidate: FourierLink) -> tuple[float, float, float]:
+        g, _, _ = min_clearance(candidate)
+        km, _ = max_curvature(candidate)
+        s = min(g / target_gap, (1.0 / km) / target_bend)
+        return s, g, 1.0 / km
+
+    best_score, best_gap, best_bend = score_of(link)
+    best_comps = list(link.components)
+    stagnant = 0
     done_at = iterations
     for it in range(iterations):
         work = FourierLink(components=comps, name=link.name, meta=link.meta)
@@ -163,9 +187,9 @@ def relax(
                 d = P[i] - P[jj]
                 dist = np.linalg.norm(d, axis=1)
                 dist = np.maximum(dist, 1e-9)
-                push = (REPULSE_GAIN * (target_gap - dist) / dist)[:, None] * d
-                np.add.at(F, i, push)
-                np.add.at(F, jj, -push)
+                push_f = (REPULSE_GAIN * (target_gap - dist) / dist)[:, None] * d
+                np.add.at(F, i, push_f)
+                np.add.at(F, jj, -push_f)
 
         # bend relief: push away from the centre of curvature where too tight
         off = 0
@@ -222,25 +246,51 @@ def relax(
         s = width0 / work.extents()["xy_diameter"]
         comps = work.scaled(s, s, s).components
 
-        if it % 10 == 0 or it == iterations - 1:
+        if max_depth is not None:
             check = FourierLink(components=comps, name=link.name, meta=link.meta)
-            g, _, _ = min_clearance(check)
-            km, _ = max_curvature(check)
+            z = check.extents()["z_extent"]
+            if z > max_depth:
+                comps = check.scaled(1.0, 1.0, max_depth / z).components
+
+        if it % 5 == 4 or it == iterations - 1:
+            check = FourierLink(components=comps, name=link.name, meta=link.meta)
+            s, g, br = score_of(check)
             if verbose:
-                print(f"    relax {it:3d}: gap {g:6.1f} mm, bend r {1/km:6.1f} mm")
-            if g >= 0.995 * target_gap and 1.0 / km >= 0.995 * target_bend:
+                print(f"    relax {it:3d}: gap {g:6.1f} mm, bend r {br:6.1f} mm")
+            if s > best_score + 0.003:
+                best_score, best_gap, best_bend = s, g, br
+                best_comps = list(comps)
+                stagnant = 0
+            else:
+                stagnant += 1
+            if s >= 0.995:
+                if s > best_score:
+                    best_score, best_gap, best_bend = s, g, br
+                    best_comps = list(comps)
+                done_at = it + 1
+                break
+            if stagnant >= patience:
                 done_at = it + 1
                 break
 
-    result = FourierLink(components=comps, name=link.name, meta=dict(link.meta))
-    gap1, _, _ = min_clearance(result)
-    kap1, _ = max_curvature(result)
+    # whatever path exited the loop, give the final state a chance to win
+    final = FourierLink(components=comps, name=link.name, meta=link.meta)
+    s, g, br = score_of(final)
+    if s > best_score:
+        best_score, best_gap, best_bend = s, g, br
+        best_comps = list(comps)
+
+    result = FourierLink(components=best_comps, name=link.name, meta=dict(link.meta))
+    gap1, kap1 = best_gap, 1.0 / best_bend
     result.meta["relaxed"] = {
         "tube": tube, "iterations": done_at,
         "gap_before": round(float(gap0), 2), "gap_after": round(float(gap1), 2),
         "bend_before": round(1.0 / kap0, 2), "bend_after": round(1.0 / kap1, 2),
         "converged": bool(
             gap1 >= 0.99 * target_gap and 1.0 / kap1 >= 0.99 * target_bend
+        ),
+        "max_tube_est": round(
+            min(2.0 * (1.0 / kap1) / 1.1, gap1 / 1.05), 1
         ),
     }
     info = result.meta["relaxed"]

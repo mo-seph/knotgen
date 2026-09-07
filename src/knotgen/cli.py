@@ -133,7 +133,14 @@ def build_parser() -> argparse.ArgumentParser:
                           "(steps capped below the strand gap), exact symmetry preserved. "
                           "Opt-in — layouts are untouched without it")
     gen.add_argument("--relax-iterations", type=int, default=150, metavar="N",
-                     help="max relaxation iterations (default 150)")
+                     help="max relaxation iterations (default 150; usually stops "
+                          "much earlier on plateau)")
+    gen.add_argument("--relax-max-depth", type=float, default=None, metavar="MM",
+                     help="keep the design within this z depth while relaxing "
+                          "(for pieces that must fit a slab/wall budget)")
+    gen.add_argument("--relax-max", action="store_true",
+                     help="push the relaxation much harder: bigger iteration "
+                          "budget and more patience before declaring a plateau")
     gen.add_argument("--fit-points", type=int, default=60, metavar="N",
                      help="points for the editable fitted-spline representation in the "
                           "export (default 60)")
@@ -283,15 +290,21 @@ def cmd_gen(args: argparse.Namespace) -> int:
         print(f"  relaxing for a {args.tube:g} mm tube "
               f"(max {args.relax_iterations} iterations)...")
         styled, info = relax(
-            styled, tube=args.tube, iterations=args.relax_iterations
+            styled,
+            tube=args.tube,
+            iterations=args.relax_iterations,
+            max_depth=args.relax_max_depth,
+            push=args.relax_max,
+            verbose=True,
         )
         print(f"  relaxed in {info['iterations']} iterations: "
               f"strand gap {info['gap_before']:g} -> {info['gap_after']:g} mm, "
               f"bend radius {info['bend_before']:g} -> {info['bend_after']:g} mm")
         if not info.get("converged", True):
-            print("  ! relaxation plateaued short of the target — this tube may "
-                  "not fit at this width; try a larger --width, shallower "
-                  "--depth crush, or accept the preflight verdict below")
+            hint = ("increase --width" if args.relax_max
+                    else "try --relax-max to push harder, or increase --width")
+            print(f"  ! plateaued short of the target: this layout tops out "
+                  f"around a {info['max_tube_est']:g} mm tube ({hint})")
 
     if args.wall:
         from knotgen.transforms import floor_z

@@ -337,6 +337,8 @@ def preview(
                 else:
                     ax.set_axis_off()
                 fig.canvas.draw_idle()
+            elif event.key in ("cmd+q", "ctrl+q", "q"):
+                plt.close(fig)
 
         fig.canvas.mpl_connect("scroll_event", on_scroll)
         fig.canvas.mpl_connect("key_press_event", on_key)
