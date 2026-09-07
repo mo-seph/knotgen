@@ -12,3 +12,4 @@ designs/*
 !docs/images/*.png
 /*.json
 .DS_Store
+!docs/images/examples/*.png

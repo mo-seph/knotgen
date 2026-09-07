@@ -4,14 +4,14 @@ Ready-made exports in [`examples/`](examples/), straight off real lamp builds an
 
 Sizes below are the design's overall footprint; *segments* is how many printable pieces the connector spacing divides it into.
 
-| file | knot | what it is | size | path length | tube | segments |
-|---|---|---|---|---|---|---|
-| [`pentafoil.json`](examples/pentafoil.json) | 5₁ | Relaxed pentafoil (tightness −0.6 rounds the lobes), deep crossings — a desk-lamp shape | ⌀300 × 100 mm | 2.0 m | 16 mm | — |
-| [`8_2_wall.json`](examples/8_2_wall.json) | 8₂ | Wall lamp with LED strip frames (LEDs facing out), joints every ≤230 mm | ⌀500 × 150 mm | 3.7 m | 40 mm | 16 |
-| [`8_2_wall_large.json`](examples/8_2_wall_large.json) | 8₂ | The larger, flatter build of the same knot | ⌀700 × 100 mm | 4.5 m | 40 mm | 20 |
-| [`8_4_wall.json`](examples/8_4_wall.json) | 8₄ | A second 8-crossing wall lamp, gentler tightness, stiffer twist smoothing | ⌀700 × 130 mm | 4.3 m | 40 mm | 19 |
-| [`borromean.json`](examples/borromean.json) | W(3,3) | The Borromean rings — three interlocked loops, no two of which link; 4 connectors per ring | ⌀300 × 30 mm | 3 × 0.71 m | 16 mm | 12 |
-| [`w37_racetrack.json`](examples/w37_racetrack.json) | W(3,7) | A weaving knot laid out as a racetrack braid closure, crossings woven along both straights | 600 × 173 mm | 4.1 m | 12 mm | 18 |
+| | file | knot | what it is | size | path length | tube | segments |
+|---|---|---|---|---|---|---|---|
+| <img src="docs/images/examples/pentafoil.png" width="150"/> | [`pentafoil.json`](examples/pentafoil.json) | 5₁ | Relaxed pentafoil (tightness −0.6 rounds the lobes), deep crossings — a desk-lamp shape | ⌀300 × 100 mm | 2.0 m | 16 mm | — |
+| <img src="docs/images/examples/8_2_wall.png" width="150"/> | [`8_2_wall.json`](examples/8_2_wall.json) | 8₂ | Wall lamp with LED strip frames (LEDs facing out), joints every ≤230 mm | ⌀500 × 150 mm | 3.7 m | 40 mm | 16 |
+| <img src="docs/images/examples/8_2_wall_large.png" width="150"/> | [`8_2_wall_large.json`](examples/8_2_wall_large.json) | 8₂ | The larger, flatter build of the same knot | ⌀700 × 100 mm | 4.5 m | 40 mm | 20 |
+| <img src="docs/images/examples/8_4_wall.png" width="150"/> | [`8_4_wall.json`](examples/8_4_wall.json) | 8₄ | A second 8-crossing wall lamp, gentler tightness, stiffer twist smoothing | ⌀700 × 130 mm | 4.3 m | 40 mm | 19 |
+| <img src="docs/images/examples/borromean.png" width="150"/> | [`borromean.json`](examples/borromean.json) | W(3,3) | The Borromean rings — three interlocked loops, no two of which link; 4 connectors per ring | ⌀300 × 30 mm | 3 × 0.71 m | 16 mm | 12 |
+| <img src="docs/images/examples/w37_racetrack.png" width="150"/> | [`w37_racetrack.json`](examples/w37_racetrack.json) | W(3,7) | A weaving knot laid out as a racetrack braid closure, crossings woven along both straights | 600 × 173 mm | 4.1 m | 12 mm | 18 |
 
 ## The commands
 
