@@ -60,6 +60,7 @@ Then in Fusion: **Utilities → Add-Ins → Scripts (Shift+S) → KnotImport** �
 | `knotgen list [-v]` | table of available knots (`-v` adds symmetry order) |
 | `knotgen check file.json --tube D` | re-run feasibility checks on an export |
 | `knotgen preview file.json` | re-open the 3D viewer on an export |
+| `knotgen gui` | open the web GUI — catalogue browser, live 3D viewer, command builder |
 | `knotgen identify <name-or-json>` | verify knot type via pyknotid (optional dep) |
 
 Knot names are Rolfsen (`3_1`, `5_2`, `8_19`, ...), or `"T(p,q)"` for a raw torus knot.
@@ -72,7 +73,7 @@ Knot names are Rolfsen (`3_1`, `5_2`, `8_19`, ...), or `"T(p,q)"` for a raw toru
 | `--breadth MM` | separate y extent — deliberately breaks the symmetry for oval layouts |
 | `--depth MM` | z extent = how far strands separate at crossings. Default is auto: 25 mm for flat/2.5D embeddings; the fully-3D ideal conformations (9–11 crossings, links) keep their natural proportions instead — squashing those creates jagged near-cusps (the tool warns if you force it) |
 | `--tightness T` | −1..1 aesthetic dial. Negative rounds corners off (relaxed rope), positive sharpens lobes into small loops (petal look). Implemented as symmetry-preserving harmonic reweighting |
-| `--source` | `auto` (default), `fremlin`, or `torus` |
+| `--source` | `auto` (default), `fremlin`, `torus`, or `ideal` |
 | `--variant` | Fremlin embedding variant (see `knotgen list`) — different symmetrisations of the same knot |
 | `--rho R` | torus / weaving rosette: r/R in (0,1); bigger = deeper lobes |
 | `--layout` | weaving knots only: `rosette` (round, q-fold symmetric, default) or `racetrack` — the braid-closure picture from the papers: a stadium shape with all crossings woven along one straight, nested non-crossing lanes around the rest |
@@ -83,6 +84,7 @@ Knot names are Rolfsen (`3_1`, `5_2`, `8_19`, ...), or `"T(p,q)"` for a raw toru
 | `--wall` | racetrack: wall-mount mode — under-strands stay flat at lane level, only over-strands arch up, and the whole path is shifted so the flat plane sits at z = 0. The z = 0 plane is the *path centerline*: author your profile accordingly (its back face below the sketch origin by the mounting offset), use `--light-dir up` so LEDs face away from the wall, and pair with `--braid-split 0.5` — one-sided arches climb the full depth in one go, so they're sharper than symmetric crossings |
 | `--tube MM` | intended tube/profile diameter: refuses to export if it won't sweep, enables the Pipe preview in Fusion |
 | `--out FILE` | write the JSON export |
+| `--mesh FILE` | write a triangle mesh of the swept tube (`.stl` binary or `.obj`) — straight to a slicer or mesh modeller, no Fusion needed. Needs `--tube`, and refuses if the tube doesn't fit |
 | `--preview` / `--save-png FILE` | 3D view (curvature-coloured, crossing markers in red) |
 
 ### Pre-flight checks
@@ -132,6 +134,18 @@ In Fusion, KnotImport then offers the surface two ways:
 
 - **quick** — loft between the two precomputed edge splines, done;
 - **editable** — your planes-and-lines workflow, automated: N construction planes along the path, each holding one line already rotated to the computed angle, lofted with the path as centerline. Drag any line afterwards and the loft follows.
+
+## The web GUI
+
+`knotgen gui` starts a small local server (stdlib only, binds 127.0.0.1) and opens a browser page: searchable catalogue (every knot, link and family the CLI knows), all the gen parameters as controls, and a proper mesh viewer — shaded tubes and strip ribbons per component, orbit/zoom, the pre-flight report always on screen.
+
+The GUI is deliberately a *command builder*: every control maps to a CLI flag, the equivalent `knotgen` command is shown live (copy it with one click), and the export buttons run the same code path as the CLI — so anything you find by exploring is reproducible from the shell, and the `command` recorded in the JSON is the real recipe. Getting files out:
+
+- **Export JSON** — writes into `output/` on the machine running the server, exactly like `--out`;
+- **Download JSON** — the same document as a browser download, handy for picking files to feed Fusion;
+- **Download STL** — a binary mesh of the swept tube (same as `--mesh`; needs a tube diameter).
+
+The viewer needs internet on first load (three.js comes from a CDN); `--port N` picks the port, `--no-browser` skips opening a tab.
 
 ## Connectors (Pattern Along Path replacement)
 

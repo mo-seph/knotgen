@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         title="commands",
-        metavar="{gen,list,check,preview,identify}",
+        metavar="{gen,list,check,preview,gui,identify}",
         help="a knot name on its own implies `gen`: `knotgen 5_1 ...`",
     )
 
@@ -177,6 +177,11 @@ def build_parser() -> argparse.ArgumentParser:
                           "Repeatable. KnotImport creates a Joint Origin at each — "
                           "attach a base with one rigid joint, full orientation "
                           "included. Needs --strip")
+    gen.add_argument("--mesh", default=None, metavar="FILE",
+                     help="write a triangle mesh of the swept tube (.stl binary, "
+                          ".obj text) — for 3D printing or a mesh modeller, no "
+                          "Fusion needed. Needs --tube for the diameter; bare "
+                          "filenames go into output/")
     gen.add_argument("--out", default=None, metavar="FILE",
                      help="write the JSON export (for the Fusion KnotImport script); "
                           "a bare filename goes into output/, move keepers to designs/")
@@ -228,6 +233,21 @@ def build_parser() -> argparse.ArgumentParser:
     prv.add_argument("--clean", action="store_true",
                      help="beauty-shot mode: no axes, colorbars, markers or "
                           "orientation aids")
+
+    gui = sub.add_parser(
+        "gui",
+        help="open the web GUI (local server + browser)",
+        description="Start a local web GUI: browse the catalogue, tweak "
+                    "parameters with a live 3D tube/strip viewer, and export. "
+                    "Every control maps to a CLI flag — the equivalent "
+                    "command is always shown, and Export runs it through the "
+                    "same code path as the command line.",
+    )
+    gui.add_argument("--port", type=int, default=8642, metavar="N",
+                     help="port to serve on (default 8642; falls back to a "
+                          "free port if taken)")
+    gui.add_argument("--no-browser", action="store_true",
+                     help="don't open a browser tab automatically")
 
     idf = sub.add_parser(
         "identify",
@@ -456,6 +476,19 @@ def cmd_gen(args: argparse.Namespace) -> int:
     elif args.out and failed:
         print("  NOT exporting — tube does not fit (see above)")
 
+    if args.mesh and args.tube is None:
+        print("  --mesh needs --tube (the diameter to sweep the mesh at)")
+        return 1
+    if args.mesh and failed:
+        print("  NOT writing mesh — tube does not fit (see above)")
+    elif args.mesh:
+        from knotgen.mesh import export_mesh
+
+        path, n_tris = export_mesh(
+            _resolve_out(args.mesh), styled, tube_diameter=args.tube
+        )
+        print(f"  wrote {path}  ({n_tris} triangles)")
+
     if args.preview or args.save_png:
         from knotgen.viz import preview
 
@@ -565,6 +598,12 @@ def cmd_preview(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gui(args: argparse.Namespace) -> int:
+    from knotgen.gui.server import run
+
+    return run(port=args.port, open_browser=not args.no_browser)
+
+
 def cmd_identify(args: argparse.Namespace) -> int:
     try:
         from pyknotid.spacecurves import Knot  # type: ignore
@@ -609,6 +648,7 @@ def main(argv: list[str] | None = None) -> int:
         "list": cmd_list,
         "check": cmd_check,
         "preview": cmd_preview,
+        "gui": cmd_gui,
         "identify": cmd_identify,
     }[args.command]
     return handler(args)
