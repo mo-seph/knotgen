@@ -52,3 +52,25 @@ def test_relax_untouched_without_optin():
     relax(k, tube=16.0, iterations=5)
     np.testing.assert_array_equal(k.a, a0)
     np.testing.assert_array_equal(k.b, b0)
+
+
+def test_relax_respects_depth_budget():
+    # depth-limited regime: budget held (soft force + one final squash),
+    # and clearance still improves over the input
+    k = apply_style(resolve("11a2", source="ideal"), width=300.0, depth=50.0,
+                    tightness=-0.15)
+    before = preflight(k).max_tube_diameter_mm
+    rk, info = relax(k, tube=40.0, iterations=60, max_depth=50.0)
+    assert as_link(rk).extents()["z_extent"] <= 50.0 * 1.001
+    assert preflight(rk).max_tube_diameter_mm > before
+
+
+def test_relax_controls_length_growth():
+    # repulsion used to pump length into the curve (wrinkles); the always-on
+    # shortening flow holds it near the original
+    k = apply_style(resolve("11a2", source="ideal"), width=300.0, depth=50.0,
+                    tightness=-0.15)
+    len0 = as_link(k).components[0].total_length()
+    rk, _ = relax(k, tube=40.0, iterations=80)
+    len1 = as_link(rk).components[0].total_length()
+    assert len1 <= 1.35 * len0

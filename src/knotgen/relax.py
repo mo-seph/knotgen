@@ -1,12 +1,23 @@
 """Clearance relaxation: open up a knot so a fatter tube fits.
 
-Opt-in post-styling step (--relax). Two forces, applied to arc-length
-samples and re-fit to the Fourier representation each iteration:
+Opt-in post-styling step (--relax). Forces applied to arc-length samples
+and re-fit to the Fourier representation each iteration:
 
   * repulsion between strand points closer than the target gap
     (tube diameter x safety), pushing tight passages apart;
   * bend relief where the curvature radius is below the tube radius,
-    pushing the curve away from its centre of curvature.
+    pushing the curve away from its centre of curvature;
+  * curve-shortening (Laplacian) fairing — always on a little, because
+    repulsion pumps arc length into the curve and surplus length in a
+    bounded box becomes wrinkles; stronger when bend-limited or when
+    length has visibly grown;
+  * a soft z pull when a depth budget is set (max_depth), replacing the
+    old per-iteration hard squash that kept re-kinking what the bend
+    relief had just fixed. The budget is enforced exactly once at the end.
+
+The step size is adaptively damped: constant gains limit-cycle (overshoot,
+bounce, repeat), so the gain shrinks on any score drop and recovers while
+progressing, and the best state is tracked every iteration.
 
 Each iteration the design is uniformly rescaled back to its original
 xy diameter, so the effect is "redistribute space at fixed size", and —
@@ -34,6 +45,9 @@ BEND_SAFETY = 1.15  # target bend radius = tube/2 * this
 REPULSE_GAIN = 0.35
 BEND_GAIN = 0.25
 LAPLACE_GAIN = 0.8
+LAPLACE_FLOOR = 0.15  # fairing is always on a little: wobble control
+LENGTH_SLACK = 1.05  # extra shortening kicks in beyond this length growth
+DEPTH_GAIN = 0.6  # soft pull back inside the z budget
 
 
 def _symmetry_projection(knot: FourierKnot, n: int) -> FourierKnot:
@@ -146,7 +160,8 @@ def relax(
     comps = list(link.components)
     if push:
         iterations = max(iterations, 600)
-    patience = 6 if push else 3
+    patience = 30 if push else 15  # iterations without a new best
+    length0 = sum(c.total_length() for c in comps)
 
     def score_of(candidate: FourierLink) -> tuple[float, float, float]:
         g, _, _ = min_clearance(candidate)
@@ -158,6 +173,8 @@ def relax(
     best_comps = list(link.components)
     stagnant = 0
     done_at = iterations
+    gain = 1.0
+    prev_score = best_score
     for it in range(iterations):
         work = FourierLink(components=comps, name=link.name, meta=link.meta)
         ts, pts_list, comp_id, idx = _sample_all(work, per_comp)
@@ -167,6 +184,27 @@ def relax(
         # exclusion window per comp: half-turn at the current tightest bend
         kmax, _ = max_curvature(work)
         cur_gap, _, _ = min_clearance(work)
+
+        # score every iteration (both metrics are already in hand) so the
+        # best state is never missed, and adapt the step gain: constant-gain
+        # forces limit-cycle (overshoot, bounce, repeat) — damp on a score
+        # drop, recover while progressing
+        cur_score = min(cur_gap / target_gap, (1.0 / kmax) / target_bend)
+        if cur_score < prev_score - 1e-4:
+            gain = max(gain * 0.6, 0.05)
+        else:
+            gain = min(gain * 1.08, 1.0)
+        prev_score = cur_score
+        if cur_score > best_score + 1e-4:
+            best_score = cur_score
+            best_gap, best_bend = cur_gap, 1.0 / kmax
+            best_comps = list(comps)
+            stagnant = 0
+        else:
+            stagnant += 1
+        if cur_score >= 0.995 or stagnant >= patience:
+            done_at = it
+            break
 
         # steer effort toward the BINDING constraint: a bend-limited knot
         # gets more un-kinking and less (interfering) repulsion, and vice
@@ -203,6 +241,16 @@ def relax(
                 np.add.at(F, i, push_f)
                 np.add.at(F, jj, -push_f)
 
+        # fairing weight: a floor of gentle curve-shortening is ALWAYS on
+        # (repulsion pumps arc length into the curve, and surplus length in
+        # a bounded box has nowhere to go but wrinkles), stronger when bend-
+        # limited, stronger again when length has visibly grown
+        len_ratio = sum(c.total_length() for c in comps) / length0
+        lap_w = LAPLACE_GAIN * (
+            LAPLACE_FLOOR + max(balance, 0.0)
+            + 2.0 * max(len_ratio - LENGTH_SLACK, 0.0)
+        )
+
         # bend relief: push away from the centre of curvature where too tight
         off = 0
         for ci, comp in enumerate(comps):
@@ -221,13 +269,22 @@ def relax(
                     bend_scale * BEND_GAIN * target_bend**2
                     * excess[hot, None] * khat
                 )
-            # curve-shortening (Laplacian) flow, only when bend-limited:
-            # the most direct un-kinker, at the cost of a little length
-            if balance > 0.0:
-                Pc = P[off:off + per_comp[ci]]
-                lap = 0.5 * (np.roll(Pc, 1, axis=0) + np.roll(Pc, -1, axis=0)) - Pc
-                F[off:off + per_comp[ci]] += LAPLACE_GAIN * balance * lap
+            # curve-shortening (Laplacian) flow: the most direct un-kinker
+            # and the only force that removes surplus length (see lap_w)
+            Pc = P[off:off + per_comp[ci]]
+            lap = 0.5 * (np.roll(Pc, 1, axis=0) + np.roll(Pc, -1, axis=0)) - Pc
+            F[off:off + per_comp[ci]] += lap_w * lap
             off += per_comp[ci]
+
+        # soft depth budget: pull samples outside the z slab back in, as a
+        # force (smoothed below like the rest) — the old per-iteration hard
+        # z-rescale squashed every bump back into a kink, so depth-limited
+        # relaxation kept undoing its own bend relief
+        if max_depth is not None:
+            zc = 0.5 * (P[:, 2].min() + P[:, 2].max())
+            dz = P[:, 2] - zc
+            over_z = np.abs(dz) - 0.45 * max_depth
+            F[:, 2] -= DEPTH_GAIN * np.sign(dz) * np.maximum(over_z, 0.0)
 
         # smooth the force field per component at the tube scale
         off = 0
@@ -246,6 +303,7 @@ def relax(
         cap = max(0.25 * cur_gap, 0.05)
         if max_move > cap:
             F *= cap / max_move
+        F *= gain  # adaptive damping
 
         # move, refit, re-symmetrize, re-normalize size
         off = 0
@@ -265,33 +323,21 @@ def relax(
         comps = work.scaled(s, s, s).components
 
         if max_depth is not None:
+            # exact backstop: the soft z-force does the real work, so any
+            # excess here is a few percent — clamping it keeps every scored
+            # state genuinely within budget (the old code clamped 2-4x
+            # overshoots, which re-kinked the whole design every iteration)
             check = FourierLink(components=comps, name=link.name, meta=link.meta)
             z = check.extents()["z_extent"]
             if z > max_depth:
                 comps = check.scaled(1.0, 1.0, max_depth / z).components
 
-        if it % 5 == 4 or it == iterations - 1:
+        if verbose and (it % 5 == 4 or it == iterations - 1):
             check = FourierLink(components=comps, name=link.name, meta=link.meta)
             s, g, br = score_of(check)
-            if verbose:
-                limiter = "bend" if br / target_bend < g / target_gap else "gap"
-                print(f"    relax {it:3d}: gap {g:6.1f} mm, bend r {br:6.1f} mm "
-                      f"({limiter}-limited)")
-            if s > best_score + 0.003:
-                best_score, best_gap, best_bend = s, g, br
-                best_comps = list(comps)
-                stagnant = 0
-            else:
-                stagnant += 1
-            if s >= 0.995:
-                if s > best_score:
-                    best_score, best_gap, best_bend = s, g, br
-                    best_comps = list(comps)
-                done_at = it + 1
-                break
-            if stagnant >= patience:
-                done_at = it + 1
-                break
+            limiter = "bend" if br / target_bend < g / target_gap else "gap"
+            print(f"    relax {it:3d}: gap {g:6.1f} mm, bend r {br:6.1f} mm "
+                  f"({limiter}-limited, gain {gain:.2f})")
 
     # whatever path exited the loop, give the final state a chance to win
     final = FourierLink(components=comps, name=link.name, meta=link.meta)
@@ -299,6 +345,17 @@ def relax(
     if s > best_score:
         best_score, best_gap, best_bend = s, g, br
         best_comps = list(comps)
+
+    if max_depth is not None:
+        # safety net — the in-loop backstop keeps scored states in budget,
+        # so this only catches the pre-loop input state
+        check = FourierLink(components=best_comps, name=link.name, meta=link.meta)
+        z = check.extents()["z_extent"]
+        if z > max_depth:
+            best_comps = check.scaled(1.0, 1.0, max_depth / z).components
+            _, best_gap, best_bend = score_of(
+                FourierLink(components=best_comps, name=link.name, meta=link.meta)
+            )
 
     result = FourierLink(components=best_comps, name=link.name, meta=dict(link.meta))
     gap1, kap1 = best_gap, 1.0 / best_bend

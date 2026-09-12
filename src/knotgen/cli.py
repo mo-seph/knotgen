@@ -136,8 +136,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="max relaxation iterations (default 150; usually stops "
                           "much earlier on plateau)")
     gen.add_argument("--relax-max-depth", type=float, default=None, metavar="MM",
-                     help="keep the design within this z depth while relaxing "
-                          "(for pieces that must fit a slab/wall budget)")
+                     help="z depth budget while relaxing. Default: your --depth "
+                          "when you gave one (an explicit depth is a design "
+                          "decision), otherwise unlimited; 0 = explicitly "
+                          "unlimited")
     gen.add_argument("--relax-max", action="store_true",
                      help="push the relaxation much harder: bigger iteration "
                           "budget and more patience before declaring a plateau")
@@ -282,6 +284,30 @@ def cmd_gen(args: argparse.Namespace) -> int:
     from knotgen.registry import resolve
     from knotgen.transforms import apply_style
 
+    # flags quietly doing nothing has cost real debugging time: racetrack
+    # layouts exist only for weaving W(p,q) names, and parametric names
+    # (T/W) are generated, not looked up from a --source
+    name = args.knot.strip()
+    if not re.match(r"^[wW]\(", name):
+        ignored = [
+            flag for flag, used in [
+                ("--layout", args.layout != "rosette"),
+                ("--aspect", args.aspect != 2.0),
+                ("--braid-fraction", args.braid_fraction != 0.8),
+                ("--lane-gap", args.lane_gap is not None),
+                ("--braid-split", args.braid_split != 0.0),
+            ] if used
+        ]
+        if ignored:
+            print(f"  ! {', '.join(ignored)} only apply to weaving knots "
+                  f'"W(p,q)" — ignored for {args.knot}')
+            if name.upper() in ("L6A4", "L6A4{0}"):
+                print('    hint: L6a4 IS the Borromean rings = the weave '
+                      '"W(3,3)" — that name takes racetrack layouts')
+    if re.match(r"^[tTwW]\(", name) and args.source != "auto":
+        print(f"  ! --source is ignored for parametric names like {args.knot} "
+              f"(they're generated, not looked up)")
+
     knot = resolve(
         args.knot,
         source=args.source,
@@ -307,13 +333,22 @@ def cmd_gen(args: argparse.Namespace) -> int:
             return 1
         from knotgen.relax import relax
 
+        # an explicit --depth is a design decision: hold relax to it unless
+        # the user gives their own budget (--relax-max-depth 0 = unlimited)
+        relax_max_depth = args.relax_max_depth
+        if relax_max_depth == 0:
+            relax_max_depth = None
+        elif relax_max_depth is None and args.depth is not None:
+            relax_max_depth = args.depth
+            print(f"  relax: holding depth <= {args.depth:g} mm (your --depth; "
+                  f"--relax-max-depth 0 to lift, or set a bigger budget)")
         print(f"  relaxing for a {args.tube:g} mm tube "
               f"(max {args.relax_iterations} iterations)...")
         styled, info = relax(
             styled,
             tube=args.tube,
             iterations=args.relax_iterations,
-            max_depth=args.relax_max_depth,
+            max_depth=relax_max_depth,
             push=args.relax_max,
             verbose=True,
         )

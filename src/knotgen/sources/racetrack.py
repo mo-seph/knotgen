@@ -157,6 +157,22 @@ def racetrack_weave(
 
     u = np.linspace(0.0, total, samples_per_lap, endpoint=False)
 
+    # z-bump easing: the bump gets wider support than the lane swap (lower
+    # z-curvature — consecutive over/under bumps of one strand blend into a
+    # smooth undulation instead of bump-flat-bump), but is kept ON the
+    # straight, so the last crossing's z-return never stacks onto the turn
+    # curvature (the classic braid-end kink)
+    EASE = 1.45
+
+    def _bump_window(u0: float, w: float) -> tuple[float, float]:
+        b0, bw = u0 - 0.5 * (EASE - 1.0) * w, EASE * w
+        if u0 < Ls:  # bottom straight
+            lo, hi = 0.0, Ls
+        else:  # top straight
+            lo, hi = Ls + cap, 2 * Ls + cap
+        b0 = min(max(b0, lo), hi - bw) if bw <= hi - lo else lo
+        return b0, min(bw, hi - lo)
+
     # per-lap lane and z profiles for a strand entering the lap in `track`
     lap_lane: list[np.ndarray] = []
     lap_z: list[np.ndarray] = []
@@ -173,13 +189,16 @@ def racetrack_weave(
                 lane[inside] = ct + (other - ct) * _smoothstep(frac[inside])
                 lane[u >= u0 + w] = other
                 over = (sign > 0) == (ct == i)
+                b0, bw = _bump_window(u0, w)
+                bfrac = (u - b0) / bw
+                binside = (bfrac >= 0.0) & (bfrac < 1.0)
                 if wall:
                     # under stays flat on the wall plane; over arches by the
                     # full separation
                     if over:
-                        z[inside] += 2.0 * bump_amp * _bump(frac[inside])
+                        z[binside] += 2.0 * bump_amp * _bump(bfrac[binside])
                 else:
-                    z[inside] += (bump_amp if over else -bump_amp) * _bump(frac[inside])
+                    z[binside] += (bump_amp if over else -bump_amp) * _bump(bfrac[binside])
                 ct = other
         lap_lane.append(lane)
         lap_z.append(z)

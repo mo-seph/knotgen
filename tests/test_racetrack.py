@@ -105,3 +105,19 @@ def test_registry_layout_passthrough():
     assert rt.meta["aspect"] == 3.0
     ro = resolve("W(3,5)")
     assert ro.meta["source"] == "weaving"
+
+
+def test_braid_end_easing_keeps_bumps_off_the_turns():
+    # the z-bump support is widened for gentler curvature but clamped to the
+    # straights: z must be (styled-)flat on the caps even at braid_fraction 1
+    from knotgen.sources.racetrack import racetrack_weave
+
+    k = racetrack_weave(3, 7, braid_fraction=1.0, braid_split=0.5)
+    from knotgen.link import as_link
+
+    for comp in as_link(k).components:
+        t = np.linspace(0, 2 * np.pi, 4000, endpoint=False)
+        pts = comp.eval(t)
+        # cap regions: |x| beyond the straight ends
+        on_cap = np.abs(pts[:, 0]) > np.abs(pts[:, 0]).max() * 0.98
+        assert np.abs(pts[on_cap, 2]).max() < 0.06  # small vs bump_amp 0.3
