@@ -139,6 +139,8 @@ In Fusion, KnotImport then offers the surface two ways:
 
 `knotgen gui` starts a small local server (stdlib only, binds 127.0.0.1) and opens a browser page: searchable catalogue (every knot, link and family the CLI knows), all the gen parameters as controls, and a proper mesh viewer — shaded tubes and strip ribbons per component, orbit/zoom, the pre-flight report always on screen.
 
+**Browse the catalogue** opens a graphical index: small drawn previews of every knot and link (over/under crossings included, one colour per component), grouped by family — classic 3₁–8₂₁, torus, weaving, the 9–11 crossing tables, and the links by crossing count. Click any preview to generate it. Each group links to a short **"what the names mean"** page explaining its numbering system with history and examples — those pages are markdown in [`src/knotgen/docs/`](src/knotgen/docs/) ([classic](src/knotgen/docs/classic.md) · [9–11 crossings](src/knotgen/docs/ht.md) · [links](src/knotgen/docs/links.md) · [torus](src/knotgen/docs/torus.md) · [weaving](src/knotgen/docs/weaving.md)), readable on GitHub too.
+
 The GUI is deliberately a *command builder*: every control maps to a CLI flag, the equivalent `knotgen` command is shown live (copy it with one click), and the export buttons run the same code path as the CLI — so anything you find by exploring is reproducible from the shell, and the `command` recorded in the JSON is the real recipe. Getting files out:
 
 - **Export JSON** — writes into `output/` on the machine running the server, exactly like `--out`;

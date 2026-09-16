@@ -18,7 +18,20 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import numpy as np
+
+from knotgen.fourier import TAU
+
 STATIC_DIR = Path(__file__).parent / "static"
+DOCS_DIR = Path(__file__).parent.parent / "docs"
+
+# curated example grids for the parametric families
+TORUS_EXAMPLES = ["T(2,3)", "T(2,5)", "T(2,7)", "T(2,9)", "T(2,11)",
+                  "T(3,4)", "T(3,5)", "T(3,7)", "T(4,5)",
+                  "T(2,4)", "T(2,6)", "T(3,6)"]
+WEAVING_EXAMPLES = ["W(3,2)", "W(3,3)", "W(3,4)", "W(3,5)", "W(3,7)",
+                    "W(4,3)", "W(4,5)", "W(5,4)", "W(5,6)",
+                    "W(2,4)", "W(3,6)", "W(4,6)"]
 
 _NAME_SORT_RE = re.compile(r"^(L?)(\d+)([an]?)_?(\d+)$")
 
@@ -101,6 +114,77 @@ def _styled_from_args(args):
 
         styled = floor_z(styled)
     return knot, styled, relax_info
+
+
+def api_groups() -> dict:
+    """The catalogue organised for the graphical browser: groups of names,
+    each pointing at the doc page that explains its naming system."""
+    from knotgen.registry import available
+    from knotgen.sources import ideal
+
+    groups = [
+        {"id": "classic", "title": "Classic knots 3₁–8₂₁",
+         "doc": "classic", "names": [r["name"] for r in available()]},
+        {"id": "torus", "title": "Torus knots T(p,q)", "doc": "torus",
+         "names": TORUS_EXAMPLES, "parametric": True},
+        {"id": "weaving", "title": "Weaving / Turk's head W(p,q)",
+         "doc": "weaving", "names": WEAVING_EXAMPLES, "parametric": True},
+    ]
+    for c in (9, 10):
+        groups.append({"id": f"k{c}", "title": f"{c}-crossing knots",
+                       "doc": "ht",
+                       "names": sorted(ideal.names(crossings=c, links=False),
+                                       key=_name_sort_key)})
+    names11 = sorted(ideal.names(crossings=11, links=False), key=_name_sort_key)
+    groups.append({"id": "k11a", "title": "11-crossing knots, alternating",
+                   "doc": "ht", "names": [n for n in names11 if "a" in n]})
+    groups.append({"id": "k11n", "title": "11-crossing knots, non-alternating",
+                   "doc": "ht", "names": [n for n in names11 if "n" in n]})
+    for c in range(2, 12):
+        sub = sorted(ideal.names(crossings=c, links=True), key=_name_sort_key)
+        if sub:
+            groups.append({"id": f"l{c}", "title": f"Links · {c} crossings",
+                           "doc": "links", "names": sub})
+    return {"groups": groups}
+
+
+_THUMB_CACHE: dict[str, list] = {}
+
+
+def api_thumbs(payload: dict) -> dict:
+    """Small preview polylines (per-component, xyz) for a batch of names.
+
+    Raw curve shapes at default parameters — the client normalises and
+    draws them; anything unresolvable is reported, not fatal.
+    """
+    from knotgen.link import as_link
+    from knotgen.registry import resolve
+
+    names = [str(n) for n in (payload.get("names") or [])][:80]
+    out: dict[str, list | None] = {}
+    for name in names:
+        if name in _THUMB_CACHE:
+            out[name] = _THUMB_CACHE[name]
+            continue
+        try:
+            link = as_link(resolve(name))
+            comps = []
+            for comp in link.components:
+                t = np.linspace(0.0, TAU, 96, endpoint=False)
+                pts = comp.eval(t)
+                comps.append([[round(float(c), 3) for c in p] for p in pts])
+            _THUMB_CACHE[name] = comps
+            out[name] = comps
+        except Exception:
+            out[name] = None
+    return {"thumbs": out}
+
+
+def api_doc(doc_id: str) -> dict:
+    path = DOCS_DIR / f"{doc_id}.md"
+    if not re.fullmatch(r"[a-z]+", doc_id) or not path.exists():
+        raise ValueError(f"no doc page {doc_id!r}")
+    return {"id": doc_id, "markdown": path.read_text()}
 
 
 def api_generate(payload: dict) -> dict:
@@ -279,6 +363,13 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif self.path == "/api/catalogue":
             self._json(api_catalogue())
+        elif self.path == "/api/groups":
+            self._json(api_groups())
+        elif self.path.startswith("/api/doc/"):
+            try:
+                self._json(api_doc(self.path.rsplit("/", 1)[1]))
+            except ValueError as exc:
+                self._json({"error": str(exc)}, status=404)
         else:
             self._json({"error": "not found"}, status=404)
 
@@ -292,6 +383,8 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if self.path == "/api/generate":
                 self._json(api_generate(payload))
+            elif self.path == "/api/thumbs":
+                self._json(api_thumbs(payload))
             elif self.path == "/api/export":
                 self._json(api_export(payload))
             elif self.path == "/api/download":

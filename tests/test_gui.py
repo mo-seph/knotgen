@@ -6,10 +6,13 @@ import pytest
 
 from knotgen.gui.server import (
     api_catalogue,
+    api_doc,
     api_download,
     api_export,
     api_generate,
+    api_groups,
     api_mesh,
+    api_thumbs,
 )
 
 
@@ -123,3 +126,36 @@ def test_mesh_requires_tube():
 def test_mesh_refuses_nonfitting_tube():
     with pytest.raises(ValueError, match="not fit"):
         api_mesh({"argv": ["3_1", "--width", "60", "--tube", "40"]})
+
+
+def test_groups_cover_the_catalogue():
+    groups = api_groups()["groups"]
+    ids = [g["id"] for g in groups]
+    assert ids[:3] == ["classic", "torus", "weaving"]
+    assert "k11a" in ids and "l6" in ids
+    by_id = {g["id"]: g for g in groups}
+    assert "5_1" in by_id["classic"]["names"]
+    assert len(by_id["k11a"]["names"]) == 367
+    assert len(by_id["k11n"]["names"]) == 185
+    assert "L6a4" in by_id["l6"]["names"]
+    # every group knows its naming-system doc, and that doc exists
+    for g in groups:
+        assert api_doc(g["doc"])["markdown"].startswith("#")
+    assert json.dumps(groups)
+
+
+def test_thumbs_batch():
+    out = api_thumbs({"names": ["5_1", "L2a1", "T(2,4)", "not_a_knot"]})["thumbs"]
+    assert len(out["5_1"]) == 1  # one component
+    assert len(out["L2a1"]) == 2  # Hopf link
+    assert len(out["T(2,4)"]) == 2  # torus link
+    assert out["not_a_knot"] is None  # unresolvable is reported, not fatal
+    assert len(out["5_1"][0]) == 96
+    assert json.dumps(out)
+
+
+def test_doc_rejects_bad_ids():
+    with pytest.raises(ValueError):
+        api_doc("../../secrets")
+    with pytest.raises(ValueError):
+        api_doc("nonexistent")

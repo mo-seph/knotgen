@@ -26,7 +26,7 @@
   h1 { font-size: 15px; margin: 0; color: var(--accent); font-weight: 600; }
   h1 small { color: var(--dim); font-weight: 400; font-size: 11px; }
   #topbar { padding: 12px; border-bottom: 1px solid var(--border); }
-  #namerow { display: flex; gap: 6px; margin-top: 8px; }
+  .namerow { display: flex; gap: 6px; margin-top: 8px; }
   input, select, button {
     background: var(--panel2); color: var(--fg); border: 1px solid var(--border);
     border-radius: 4px; padding: 4px 6px; font: inherit;
@@ -70,16 +70,49 @@
   #report .ok { color: var(--ok); }
   #loadmsg { position: absolute; inset: 0; display: flex; align-items: center;
              justify-content: center; color: var(--dim); }
+  /* catalogue browser */
+  #browse { position: absolute; inset: 0; background: var(--bg); overflow-y: auto;
+            padding: 14px 18px; z-index: 5; }
+  #browse h2 { font-size: 15px; color: var(--accent); margin: 4px 0 10px; }
+  #browse details { border-bottom: 1px solid var(--border); padding: 4px 0 10px; }
+  #browse summary { font-size: 13px; }
+  #browse summary .count { color: var(--dim); font-weight: 400; }
+  .aboutlink { margin-left: 10px; font-size: 11px; color: var(--accent);
+               cursor: pointer; text-decoration: underline dotted; font-weight: 400; }
+  .kgrid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .kcell { width: 78px; cursor: pointer; text-align: center; border-radius: 6px;
+           padding: 3px 0 5px; }
+  .kcell:hover { background: var(--panel2); outline: 1px solid var(--accent); }
+  .kcell canvas { display: block; margin: 0 auto; background: var(--panel);
+                  border-radius: 5px; }
+  .kcell span { font-size: 10px; color: var(--dim); }
+  .kcell:hover span { color: var(--fg); }
+  #browseclose, #docclose { position: sticky; float: right; top: 0; }
+  /* doc pages */
+  #docview { position: absolute; inset: 0; background: var(--bg); overflow-y: auto;
+             padding: 14px 22px; z-index: 6; }
+  #doccontent { max-width: 640px; line-height: 1.6; }
+  #doccontent h1 { font-size: 17px; color: var(--accent); }
+  #doccontent h2 { font-size: 14px; color: var(--accent); }
+  #doccontent code { background: var(--panel2); padding: 1px 5px; border-radius: 3px;
+                     font: 11.5px ui-monospace, Menlo, monospace; }
+  #doccontent pre { background: var(--panel2); padding: 10px 12px; border-radius: 6px;
+                    overflow-x: auto; }
+  #doccontent pre code { background: none; padding: 0; }
+  #doccontent li { margin: 4px 0; }
 </style>
 </head>
 <body>
 <div id="sidebar">
   <div id="topbar">
     <h1>knotgen <small>— explore &amp; build commands</small></h1>
-    <div id="namerow">
+    <div class="namerow">
       <input id="knotname" list="knotnames" value="5_1" spellcheck="false"
              placeholder='5_1, 11n34, L6a4, T(2,7), W(3,5)'/>
       <button id="generate" class="primary">Generate</button>
+    </div>
+    <div class="namerow" style="margin-top:6px">
+      <button id="browsebtn" style="flex:1">⊞ Browse the catalogue</button>
     </div>
     <datalist id="knotnames"></datalist>
   </div>
@@ -164,6 +197,15 @@
     <label><input id="spin" type="checkbox"/> spin</label>
   </div>
   <div id="report" class="overlay hidden"></div>
+  <div id="browse" class="hidden">
+    <button id="browseclose">✕ close</button>
+    <h2>Catalogue</h2>
+    <div id="groups"></div>
+  </div>
+  <div id="docview" class="hidden">
+    <button id="docclose">✕ close</button>
+    <div id="doccontent"></div>
+  </div>
 </div>
 
 <script type="importmap">
@@ -491,6 +533,161 @@ $('meshbtn').addEventListener('click', doDownloadMesh);
 $('knotname').addEventListener('keydown', e => { if (e.key === 'Enter') generate(); });
 $('copycmd').addEventListener('click', () =>
   navigator.clipboard.writeText($('cmd').textContent));
+
+// ---------- catalogue browser ----------
+const THUMB = 72;
+
+function drawThumb(canvas, comps) {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = THUMB * dpr; canvas.height = THUMB * dpr;
+  canvas.style.width = canvas.style.height = THUMB + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  // normalise xy over all components; z drives draw order + shading
+  let xs = [], ys = [], zs = [];
+  comps.forEach(c => c.forEach(p => { xs.push(p[0]); ys.push(p[1]); zs.push(p[2]); }));
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const span = Math.max(Math.max(...xs) - Math.min(...xs),
+                        Math.max(...ys) - Math.min(...ys), 1e-9);
+  const zlo = Math.min(...zs), zspan = Math.max(Math.max(...zs) - zlo, 1e-9);
+  const s = (THUMB - 14) / span;
+  const X = x => THUMB / 2 + (x - cx) * s;
+  const Y = y => THUMB / 2 - (y - cy) * s;
+  // short polyline chunks sorted by depth, each drawn halo-then-stroke:
+  // the halo breaks only appear where strands genuinely cross in z
+  const CHUNK = 8;
+  const chunks = [];
+  comps.forEach((c, ci) => {
+    for (let i = 0; i < c.length; i += CHUNK) {
+      const pts = [];
+      for (let k = i; k <= i + CHUNK; k++) pts.push(c[k % c.length]);
+      chunks.push({ pts, z: pts.reduce((s, p) => s + p[2], 0) / pts.length, ci });
+    }
+  });
+  chunks.sort((p, q) => p.z - q.z);
+  const hues = [40, 200, 340, 120, 270, 170];
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (const g of chunks) {
+    const t = (g.z - zlo) / zspan;
+    ctx.beginPath();
+    ctx.moveTo(X(g.pts[0][0]), Y(g.pts[0][1]));
+    for (let k = 1; k < g.pts.length; k++) ctx.lineTo(X(g.pts[k][0]), Y(g.pts[k][1]));
+    ctx.strokeStyle = '#1d2027';
+    ctx.lineWidth = 4.6;
+    ctx.stroke();
+    ctx.strokeStyle = `hsl(${hues[g.ci % hues.length]} 55% ${38 + 27 * t}%)`;
+    ctx.lineWidth = 2.4;
+    ctx.stroke();
+  }
+}
+
+async function loadGroupThumbs(group, grid) {
+  const cells = {};
+  for (const name of group.names) {
+    const cell = document.createElement('div');
+    cell.className = 'kcell';
+    const cv = document.createElement('canvas');
+    const label = document.createElement('span');
+    label.textContent = name;
+    cell.append(cv, label);
+    cell.addEventListener('click', () => {
+      $('knotname').value = name;
+      $('browse').classList.add('hidden');
+      refreshCmd();
+      generate();
+    });
+    grid.appendChild(cell);
+    cells[name] = cv;
+  }
+  for (let i = 0; i < group.names.length; i += 60) {
+    const chunk = group.names.slice(i, i + 60);
+    try {
+      const data = await post('/api/thumbs', { names: chunk });
+      for (const [name, comps] of Object.entries(data.thumbs)) {
+        if (comps) drawThumb(cells[name], comps);
+      }
+    } catch (e) { break; }
+  }
+}
+
+async function openDoc(docId) {
+  const r = await fetch('/api/doc/' + docId);
+  const data = await r.json();
+  $('doccontent').innerHTML = mdToHtml(data.markdown || '*(doc not found)*');
+  $('docview').classList.remove('hidden');
+}
+
+function mdToHtml(md) {
+  const inline = s => esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/\*([^*]+)\*/g, '<i>$1</i>');
+  const out = [];
+  let list = false, code = false, codebuf = [], para = [];
+  const flushPara = () => {
+    if (para.length) { out.push('<p>' + inline(para.join(' ')) + '</p>'); para = []; }
+  };
+  const flushList = () => { if (list) { out.push('</ul>'); list = false; } };
+  for (const raw of md.split('\n')) {
+    if (raw.startsWith('```')) {
+      flushPara(); flushList();
+      if (code) { out.push('<pre><code>' + esc(codebuf.join('\n')) + '</code></pre>'); codebuf = []; }
+      code = !code;
+      continue;
+    }
+    if (code) { codebuf.push(raw); continue; }
+    const line = raw.trimEnd();
+    if (/^# /.test(line)) { flushPara(); flushList(); out.push('<h1>' + inline(line.slice(2)) + '</h1>'); }
+    else if (/^## /.test(line)) { flushPara(); flushList(); out.push('<h2>' + inline(line.slice(3)) + '</h2>'); }
+    else if (/^- /.test(line)) {
+      flushPara();
+      if (!list) { out.push('<ul>'); list = true; }
+      out.push('<li>' + inline(line.slice(2)) + '</li>');
+    } else if (line === '') { flushPara(); flushList(); }
+    else if (/^\s+/.test(raw) && list) {
+      out[out.length - 1] = out[out.length - 1].replace(/<\/li>$/, ' ' + inline(line.trim()) + '</li>');
+    } else { flushList(); para.push(line); }
+  }
+  flushPara(); flushList();
+  return out.join('\n');
+}
+
+let groupsBuilt = false;
+async function openBrowse() {
+  $('browse').classList.remove('hidden');
+  if (groupsBuilt) return;
+  groupsBuilt = true;
+  const data = await fetch('/api/groups').then(r => r.json());
+  for (const group of data.groups) {
+    const det = document.createElement('details');
+    const sum = document.createElement('summary');
+    sum.innerHTML = `${esc(group.title)} <span class="count">(${group.names.length}${group.parametric ? ' examples — any (p,q) works' : ''})</span>`;
+    const about = document.createElement('span');
+    about.className = 'aboutlink';
+    about.textContent = 'what the names mean';
+    about.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); openDoc(group.doc); });
+    sum.appendChild(about);
+    const grid = document.createElement('div');
+    grid.className = 'kgrid';
+    det.append(sum, grid);
+    det.addEventListener('toggle', () => {
+      if (det.open && !det.dataset.loaded) {
+        det.dataset.loaded = '1';
+        loadGroupThumbs(group, grid);
+      }
+    });
+    $('groups').appendChild(det);
+  }
+  // the first group is small and the natural landing spot
+  const first = $('groups').querySelector('details');
+  if (first) first.open = true;
+}
+
+$('browsebtn').addEventListener('click', openBrowse);
+$('browseclose').addEventListener('click', () => $('browse').classList.add('hidden'));
+$('docclose').addEventListener('click', () => $('docview').classList.add('hidden'));
 
 // catalogue -> datalist
 fetch('/api/catalogue').then(r => r.json()).then(cat => {
