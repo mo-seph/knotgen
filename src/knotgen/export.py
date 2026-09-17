@@ -267,6 +267,8 @@ def build_document(
         doc["fourier"]["b"] = link.components[0].b.tolist()
     if tube_diameter is not None:
         doc["pipe_preview"] = {"diameter_mm": tube_diameter}
+        doc["checks"]["tube_diameter_mm"] = tube_diameter
+        doc["checks"]["ok_for_tube"] = bool(report.ok_for_tube)
     if strips:
         doc["strips"] = strips
         doc["strip"] = strips[0]  # v1 compatibility for single-component files

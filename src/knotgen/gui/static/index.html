@@ -146,9 +146,10 @@
       <div class="row"><label for="tube">tube ⌀ mm</label><input id="tube" type="number" step="1" placeholder="none"/></div>
       <div class="row"><label for="relax">relax clearance</label><input id="relax" type="checkbox"/></div>
       <div class="row"><label for="relaxiter">max iterations</label><input id="relaxiter" type="number" value="150" step="50"/></div>
-      <div class="row"><label for="relaxmaxdepth">max depth mm</label><input id="relaxmaxdepth" type="number" step="5" placeholder="none"/></div>
+      <div class="row"><label for="relaxmaxdepth">max depth mm</label><input id="relaxmaxdepth" type="number" step="5" placeholder="= depth"/></div>
       <div class="row"><label for="relaxmax">push hard (--relax-max)</label><input id="relaxmax" type="checkbox"/></div>
-      <div class="hint">relax needs a tube diameter, and can take a while</div>
+      <div class="hint">relax needs a tube diameter and can take a while; it holds
+        your depth by default — max depth 0 = unlimited</div>
     </details>
     <details>
       <summary>LED strip</summary>
@@ -454,7 +455,13 @@ async function generate() {
   btn.disabled = false; btn.textContent = 'Generate';
 }
 
-async function doExport() {
+function confirmForce(log) {
+  return /does not fit/.test(log) &&
+    window.confirm('The tube does not fit this design. Write the file ' +
+                   'anyway? (the JSON records the failing check)');
+}
+
+async function doExport(force = false) {
   const out = $('outfile').value.trim() || $('outfile').placeholder;
   if (!out) return;
   $('outfile').value = out;
@@ -462,7 +469,12 @@ async function doExport() {
   const btn = $('exportbtn');
   btn.disabled = true; btn.textContent = 'Exporting…';
   try {
-    const data = await post('/api/export', { argv: [...buildArgv(), '--out', out] });
+    const data = await post('/api/export',
+      { argv: [...buildArgv(), '--out', out], force });
+    if (data.returncode !== 0 && !force && confirmForce(data.log)) {
+      btn.disabled = false;
+      return doExport(true);
+    }
     const cls = data.returncode === 0 ? 'ok' : 'bad';
     $('report').innerHTML = `<pre class="${cls}">${esc(data.log)}</pre>`;
     $('report').classList.remove('hidden');
@@ -501,11 +513,15 @@ async function busy(btnId, label, fn) {
   btn.disabled = false; btn.textContent = old;
 }
 
-async function doDownloadJson() {
+async function doDownloadJson(force = false) {
   await busy('downloadbtn', 'Building…', async () => {
     const data = await post('/api/download',
-      { argv: buildArgv(), filename: outName('.json') });
-    if (data.returncode !== 0) { reportMsg(`<pre class="bad">${esc(data.log)}</pre>`); return; }
+      { argv: buildArgv(), filename: outName('.json'), force });
+    if (data.returncode !== 0) {
+      if (!force && confirmForce(data.log)) return doDownloadJson(true);
+      reportMsg(`<pre class="bad">${esc(data.log)}</pre>`);
+      return;
+    }
     saveBlob(new Blob([data.content], { type: 'application/json' }), data.filename);
     reportMsg(`<pre class="ok">${esc(data.log)}\ndownloaded as ${esc(data.filename)}</pre>`);
   });
@@ -533,8 +549,8 @@ async function doDownloadMesh(force = false) {
 }
 
 $('generate').addEventListener('click', generate);
-$('exportbtn').addEventListener('click', doExport);
-$('downloadbtn').addEventListener('click', doDownloadJson);
+$('exportbtn').addEventListener('click', () => doExport());
+$('downloadbtn').addEventListener('click', () => doDownloadJson());
 $('meshbtn').addEventListener('click', () => doDownloadMesh());
 $('knotname').addEventListener('keydown', e => { if (e.key === 'Enter') generate(); });
 $('copycmd').addEventListener('click', () =>

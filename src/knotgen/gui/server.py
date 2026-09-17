@@ -102,9 +102,16 @@ def _styled_from_args(args):
             raise ValueError("--relax needs --tube (the diameter to open clearance for)")
         from knotgen.relax import relax
 
+        # same depth-budget default as the CLI: an explicit depth is held
+        # (relax-max-depth 0 lifts it) — the GUI must not quietly diverge
+        max_depth = args.relax_max_depth
+        if max_depth == 0:
+            max_depth = None
+        elif max_depth is None and args.depth is not None:
+            max_depth = args.depth
         styled, relax_info = relax(
             styled, tube=args.tube, iterations=args.relax_iterations,
-            max_depth=args.relax_max_depth, push=args.relax_max, verbose=False,
+            max_depth=max_depth, push=args.relax_max, verbose=False,
         )
         relax_info = {k: (float(v) if hasattr(v, "item") or isinstance(v, float) else v)
                       for k, v in relax_info.items()}
@@ -114,6 +121,24 @@ def _styled_from_args(args):
 
         styled = floor_z(styled)
     return knot, styled, relax_info
+
+
+_DESIGN_CACHE: dict[tuple, tuple] = {}
+
+
+def _design_for(argv: list) -> tuple:
+    """(args, knot, styled, relax_info) for an argv — cached, so a Download
+    after a Generate serves EXACTLY the design on screen instead of
+    re-running the pipeline (and any --relax) a second time."""
+    key = tuple(str(a) for a in argv)
+    if key in _DESIGN_CACHE:
+        return _DESIGN_CACHE[key]
+    args = _parse_gen_argv(list(key))
+    result = (args, *_styled_from_args(args))
+    if len(_DESIGN_CACHE) >= 8:
+        _DESIGN_CACHE.pop(next(iter(_DESIGN_CACHE)))
+    _DESIGN_CACHE[key] = result
+    return result
 
 
 def api_groups() -> dict:
@@ -188,12 +213,10 @@ def api_doc(doc_id: str) -> dict:
 
 
 def api_generate(payload: dict) -> dict:
-    args = _parse_gen_argv(payload.get("argv") or [])
-
     from knotgen.checks import preflight
     from knotgen.link import as_link
 
-    knot, styled, relax_info = _styled_from_args(args)
+    args, knot, styled, relax_info = _design_for(payload.get("argv") or [])
     link = as_link(styled)
     report = preflight(styled, tube_diameter=args.tube)
     e = styled.extents()
@@ -276,21 +299,6 @@ def api_generate(payload: dict) -> dict:
     }
 
 
-def api_export(payload: dict) -> dict:
-    """Run the argv through the real CLI entry point, capturing its output."""
-    from knotgen.cli import main as cli_main
-
-    argv = [str(a) for a in (payload.get("argv") or [])]
-    # the GUI is the preview; these would pop windows on the server side
-    argv = [a for a in argv if a not in ("--preview",)]
-    if "--out" not in argv:
-        raise ValueError("export needs an output filename (--out)")
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        code = cli_main(list(argv))
-    return {"returncode": int(code), "log": buf.getvalue()}
-
-
 def _safe_filename(name: str, suffix: str) -> str:
     name = re.sub(r"[^\w.\-]+", "_", name.strip()) or "knot"
     if not name.lower().endswith(suffix):
@@ -298,40 +306,84 @@ def _safe_filename(name: str, suffix: str) -> str:
     return Path(name).name
 
 
+def _document_for(argv: list, out_name: str, force: bool) -> dict:
+    """The full export document for an argv, from the cached design — the
+    same assembly the CLI uses, with the command recorded as the user
+    would type it. Raises _TubeFailure when the check fails without force."""
+    from knotgen.checks import preflight
+    from knotgen.cli import assemble_document, compute_strip_frames
+    from knotgen.link import as_link
+
+    args, _, styled, _ = _design_for(argv)
+    if args.connectors and args.connector_spacing:
+        raise ValueError("give either connectors count OR max spacing, not both")
+    report = preflight(styled, tube_diameter=args.tube)
+    if args.tube is not None and not report.ok_for_tube and not force:
+        raise _TubeFailure(report.summary())
+    frames = compute_strip_frames(as_link(styled), args)
+    args.argv = [*getattr(args, "argv", list(argv)), "--out", out_name]
+    try:
+        return assemble_document(styled, report, args, frames)
+    finally:
+        args.argv = args.argv[:-2]  # the cached args must stay pristine
+
+
+class _TubeFailure(Exception):
+    """Tube check failed and the caller did not force."""
+
+
+def api_export(payload: dict) -> dict:
+    """Write the export JSON into output/ (like the CLI's --out), from the
+    cached design — no second pipeline run."""
+    argv = [str(a) for a in (payload.get("argv") or []) if a != "--preview"]
+    if "--out" in argv:
+        i = argv.index("--out")
+        out_name = argv[i + 1] if i + 1 < len(argv) else None
+        argv = argv[:i] + argv[i + 2:]
+    else:
+        out_name = payload.get("filename")
+    if not out_name:
+        raise ValueError("export needs an output filename (--out)")
+    from knotgen.cli import _resolve_out
+    from knotgen.export import export_json
+
+    try:
+        doc = _document_for(argv, out_name, bool(payload.get("force")))
+    except _TubeFailure as exc:
+        return {"returncode": 1,
+                "log": f"{exc}\n  NOT exporting — tube does not fit"}
+    out = export_json(_resolve_out(out_name), doc)
+    return {"returncode": 0,
+            "log": f"wrote {out}  (fit deviation "
+                   f"{doc['checks']['fit_max_deviation_mm']} mm)"}
+
+
 def api_download(payload: dict) -> dict:
-    """Same run as api_export, but the JSON comes back for a browser
-    download instead of landing in output/."""
-    import tempfile
-
-    from knotgen.cli import main as cli_main
-
+    """Same document as api_export, returned for a browser download."""
     argv = [str(a) for a in (payload.get("argv") or []) if a != "--preview"]
     if "--out" in argv:
         raise ValueError("download builds its own --out; leave it off the argv")
     filename = _safe_filename(payload.get("filename") or "knot.json", ".json")
-    buf = io.StringIO()
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td) / filename
-        with contextlib.redirect_stdout(buf):
-            code = cli_main([*argv, "--out", str(tmp)])
-        if code != 0 or not tmp.exists():
-            return {"returncode": int(code), "log": buf.getvalue()}
-        # the recorded command should read as the user would type it
-        content = tmp.read_text().replace(str(tmp), filename)
-    log = buf.getvalue().replace(str(tmp), filename)
-    return {"returncode": 0, "log": log, "filename": filename, "content": content}
+    try:
+        doc = _document_for(argv, filename, bool(payload.get("force")))
+    except _TubeFailure as exc:
+        return {"returncode": 1,
+                "log": f"{exc}\n  NOT exporting — tube does not fit"}
+    content = json.dumps(doc, indent=1)
+    return {"returncode": 0, "filename": filename, "content": content,
+            "log": f"built {filename}  (fit deviation "
+                   f"{doc['checks']['fit_max_deviation_mm']} mm)"}
 
 
 def api_mesh(payload: dict) -> tuple[str, bytes]:
-    """Binary STL of the swept tube, for a browser download."""
-    args = _parse_gen_argv(payload.get("argv") or [])
-    if args.tube is None:
-        raise ValueError("mesh export needs a tube diameter (set tube ⌀ mm)")
-
+    """Binary STL of the swept tube, for a browser download — built from
+    the cached design, i.e. exactly the geometry in the viewer."""
     from knotgen.checks import preflight
     from knotgen.mesh import design_mesh, stl_bytes
 
-    _, styled, _ = _styled_from_args(args)
+    args, _, styled, _ = _design_for(payload.get("argv") or [])
+    if args.tube is None:
+        raise ValueError("mesh export needs a tube diameter (set tube ⌀ mm)")
     report = preflight(styled, tube_diameter=args.tube)
     if not report.ok_for_tube and not payload.get("force"):
         raise ValueError("tube does not fit — the mesh would self-intersect "

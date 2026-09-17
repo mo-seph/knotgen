@@ -289,6 +289,68 @@ def _resolve_out(path_str: str) -> "Path":
     return p
 
 
+def assemble_document(styled, report, args, strip_frames=None) -> dict:
+    """The ONE place the export JSON is put together (paths, strips,
+    connectors, mounts) — shared by cmd_gen and the GUI server, so a GUI
+    download is byte-identical to the CLI export of the same design."""
+    import shlex
+
+    from knotgen.export import (
+        build_connectors_section,
+        build_document,
+        build_mounts_section,
+        build_strip_section,
+    )
+
+    strip_sections = None
+    if strip_frames is not None:
+        strip_sections = [
+            build_strip_section(
+                f, width=args.strip, light_dir_spec=args.light_dir,
+                frame_count=args.frame_count, component=ci,
+            )
+            for ci, f in enumerate(strip_frames)
+        ]
+    cli_options = {
+        k: v for k, v in vars(args).items()
+        if k not in ("command", "argv") and not k.startswith("_")
+    }
+    doc = build_document(
+        styled, report=report, fit_points=args.fit_points,
+        tube_diameter=args.tube, strips=strip_sections,
+        command="knotgen " + shlex.join(getattr(args, "argv", [])),
+        cli_options=cli_options,
+    )
+    if (args.connectors or args.connector_spacing) and strip_frames is not None:
+        doc["connectors"] = build_connectors_section(
+            strip_frames, count=args.connectors,
+            spacing=args.connector_spacing, offset=args.connector_offset,
+        )
+    if args.mount and strip_frames is not None:
+        specs = []
+        for m in args.mount:
+            if ":" in m:
+                comp_part, mm_part = m.split(":", 1)
+                specs.append((int(comp_part.lstrip("cC")) - 1, float(mm_part)))
+            else:
+                specs.append((0, float(m)))
+        doc["mounts"] = build_mounts_section(strip_frames, specs)
+    return doc
+
+
+def compute_strip_frames(styled_link, args):
+    """Orientation frames for --strip, one per component (None without it)."""
+    if not args.strip:
+        return None
+    from knotgen.frames import compute_frames
+
+    return [
+        compute_frames(comp, follow=args.follow, light_dir=args.light_dir,
+                       twist_smooth=args.twist_smooth)
+        for comp in styled_link.components
+    ]
+
+
 def cmd_gen(args: argparse.Namespace) -> int:
     from knotgen.checks import preflight
     from knotgen.registry import resolve
@@ -410,19 +472,8 @@ def cmd_gen(args: argparse.Namespace) -> int:
     report = preflight(styled, tube_diameter=args.tube)
     print(report.summary())
 
-    strip_frames = None
-    if args.strip:
-        from knotgen.frames import compute_frames
-
-        strip_frames = [
-            compute_frames(
-                comp,
-                follow=args.follow,
-                light_dir=args.light_dir,
-                twist_smooth=args.twist_smooth,
-            )
-            for comp in styled_link.components
-        ]
+    strip_frames = compute_strip_frames(styled_link, args)
+    if strip_frames is not None:
         agg = {
             "max_twist_deg_per_cm": max(
                 f.metrics()["max_twist_deg_per_cm"] for f in strip_frames
@@ -449,49 +500,15 @@ def cmd_gen(args: argparse.Namespace) -> int:
         print("  ! tube does not fit, but --force writes anyway "
               "(the export records the failing check)")
 
+    if args.connectors and args.connector_spacing:
+        print("  give either --connectors or --connector-spacing, not both")
+        return 1
+
     if args.out and not blocked:
-        from knotgen.export import build_document, build_strip_section, export_json
+        from knotgen.export import export_json
 
-        strip_sections = None
-        if strip_frames is not None:
-            strip_sections = [
-                build_strip_section(
-                    f,
-                    width=args.strip,
-                    light_dir_spec=args.light_dir,
-                    frame_count=args.frame_count,
-                    component=ci,
-                )
-                for ci, f in enumerate(strip_frames)
-            ]
-        import shlex
-
-        cli_options = {
-            k: v for k, v in vars(args).items()
-            if k not in ("command", "argv") and not k.startswith("_")
-        }
-        doc = build_document(
-            styled,
-            report=report,
-            fit_points=args.fit_points,
-            tube_diameter=args.tube,
-            strips=strip_sections,
-            command="knotgen " + shlex.join(getattr(args, "argv", [])),
-            cli_options=cli_options,
-        )
-        want_connectors = args.connectors or args.connector_spacing
-        if want_connectors and strip_frames is not None:
-            from knotgen.export import build_connectors_section
-
-            if args.connectors and args.connector_spacing:
-                print("  give either --connectors or --connector-spacing, not both")
-                return 1
-            doc["connectors"] = build_connectors_section(
-                strip_frames,
-                count=args.connectors,
-                spacing=args.connector_spacing,
-                offset=args.connector_offset,
-            )
+        doc = assemble_document(styled, report, args, strip_frames)
+        if "connectors" in doc:
             for pc in doc["connectors"]["per_component"]:
                 comp_label = (
                     f"component {pc['component'] + 1}: " if n_comp > 1 else ""
@@ -500,21 +517,10 @@ def cmd_gen(args: argparse.Namespace) -> int:
                       f"{pc['spacing_mm']:g} mm spacing"
                       + (f" (max {args.connector_spacing:g})"
                          if args.connector_spacing else ""))
-        elif want_connectors:
+        elif args.connectors or args.connector_spacing:
             print("  (--connectors/--connector-spacing need --strip for "
                   "orientation frames; skipped)")
-
-        if args.mount and strip_frames is not None:
-            from knotgen.export import build_mounts_section
-
-            specs = []
-            for m in args.mount:
-                if ":" in m:
-                    comp_part, mm_part = m.split(":", 1)
-                    specs.append((int(comp_part.lstrip("cC")) - 1, float(mm_part)))
-                else:
-                    specs.append((0, float(m)))
-            doc["mounts"] = build_mounts_section(strip_frames, specs)
+        if "mounts" in doc:
             for fr in doc["mounts"]["frames"]:
                 comp_label = (f"c{fr['component'] + 1} " if n_comp > 1 else "")
                 print(f"  mount frame: {comp_label}at {fr['s_mm']:g} mm along the path")
@@ -545,20 +551,9 @@ def cmd_gen(args: argparse.Namespace) -> int:
     if args.relax and (not args.out or blocked):
         import re as _re
 
-        from knotgen.export import build_document, export_json
+        from knotgen.export import export_json
 
-        import shlex
-
-        cli_options = {
-            k: v for k, v in vars(args).items()
-            if k not in ("command", "argv") and not k.startswith("_")
-        }
-        doc = build_document(
-            styled, report=report, fit_points=args.fit_points,
-            tube_diameter=args.tube,
-            command="knotgen " + shlex.join(getattr(args, "argv", [])),
-            cli_options=cli_options,
-        )
+        doc = assemble_document(styled, report, args, strip_frames)
         safe = _re.sub(r"[^\w.\-]+", "_", styled.name).strip("_")
         scratch = export_json(_resolve_out(f"relaxed_{safe}.json"), doc)
         print(f"  relaxed curve parked in {scratch} — reuse it without "

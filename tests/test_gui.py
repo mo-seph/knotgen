@@ -98,9 +98,40 @@ def test_download_returns_clean_document():
     assert out["returncode"] == 0
     assert out["filename"] == "my_knot.json"  # sanitized
     doc = json.loads(out["content"])
-    # no temp-dir paths leak into the reproducibility record
-    assert doc["command"] == "knotgen gen 3_1 --width 150 --out my_knot.json"
-    assert "/" not in doc["cli_options"]["out"]
+    # the recorded command reads as the user would type it
+    assert doc["command"] == "knotgen 3_1 --width 150 --out my_knot.json"
+
+
+def test_downloads_serve_the_cached_design(monkeypatch):
+    # generate once (with relax), then downloads must NOT re-run the
+    # pipeline: poison relax and resolve — cache hits never touch them
+    argv = ["3_1", "--width", "150", "--tube", "8", "--relax",
+            "--relax-iterations", "5"]
+    api_generate({"argv": argv})
+
+    import knotgen.gui.server as srv
+    import knotgen.registry
+    import knotgen.relax
+
+    def boom(*a, **k):
+        raise AssertionError("pipeline re-ran despite the design cache")
+
+    monkeypatch.setattr(knotgen.relax, "relax", boom)
+    monkeypatch.setattr(knotgen.registry, "resolve", boom)
+    filename, data = api_mesh({"argv": argv, "force": True})
+    assert data[:2] and len(data) > 84
+    out = api_download({"argv": argv, "filename": "x.json", "force": True})
+    assert out["returncode"] == 0
+
+
+def test_download_force_overrides_failing_check():
+    argv = ["3_1", "--width", "60", "--tube", "40"]
+    refused = api_download({"argv": argv, "filename": "n.json"})
+    assert refused["returncode"] == 1 and "not fit" in refused["log"]
+    forced = api_download({"argv": argv, "filename": "n.json", "force": True})
+    assert forced["returncode"] == 0
+    doc = json.loads(forced["content"])
+    assert doc["checks"]["ok_for_tube"] is False  # failure is recorded
 
 
 def test_download_rejects_explicit_out():
