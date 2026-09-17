@@ -16,8 +16,18 @@ and re-fit to the Fourier representation each iteration:
     relief had just fixed. The budget is enforced exactly once at the end.
 
 The step size is adaptively damped: constant gains limit-cycle (overshoot,
-bounce, repeat), so the gain shrinks on any score drop and recovers while
+bounce, repeat), so the gain shrinks on genuine degradation (with a relative
+deadband — refit jitter must not strangle it) and recovers while
 progressing, and the best state is tracked every iteration.
+
+WORKING targets are state-relative, not request-relative: each iteration
+aims for AMBITION x the currently-achievable tube, so the dynamics are
+identical whatever tube was requested (the request only enters the scoring
+and reporting), and the design keeps opening up and smoothing PAST a
+satisfied request until it genuinely plateaus — no pinched lobes left at
+"barely fits". The requested tube decides the primary score; the absolute
+achievable tube breaks ties, so improvements keep registering after the
+request is met.
 
 Each iteration the design is uniformly rescaled back to its original
 xy diameter, so the effect is "redistribute space at fixed size", and —
@@ -48,6 +58,7 @@ LAPLACE_GAIN = 0.8
 LAPLACE_FLOOR = 0.15  # fairing is always on a little: wobble control
 LENGTH_SLACK = 1.05  # extra shortening kicks in beyond this length growth
 DEPTH_GAIN = 0.6  # soft pull back inside the z budget
+AMBITION = 2.0  # working target = this x currently-achievable tube
 
 
 def _symmetry_projection(knot: FourierKnot, n: int) -> FourierKnot:
@@ -138,7 +149,6 @@ def relax(
 
     target_gap = tube * CLEARANCE_SAFETY
     target_bend = 0.5 * tube * BEND_SAFETY
-    kappa_limit = 1.0 / target_bend
 
     width0 = link.extents()["xy_diameter"]
     gap0, _, _ = min_clearance(link)
@@ -170,11 +180,12 @@ def relax(
         return s, g, 1.0 / km
 
     best_score, best_gap, best_bend = score_of(link)
+    best_est = min(best_gap / CLEARANCE_SAFETY, 2.0 * best_bend / BEND_SAFETY)
+    best_key = (round(min(best_score, 1.0), 4), round(best_est, 2))
     best_comps = list(link.components)
     stagnant = 0
     done_at = iterations
     gain = 1.0
-    prev_score = best_score
     for it in range(iterations):
         work = FourierLink(components=comps, name=link.name, meta=link.meta)
         ts, pts_list, comp_id, idx = _sample_all(work, per_comp)
@@ -185,32 +196,50 @@ def relax(
         kmax, _ = max_curvature(work)
         cur_gap, _, _ = min_clearance(work)
 
-        # score every iteration (both metrics are already in hand) so the
-        # best state is never missed, and adapt the step gain: constant-gain
-        # forces limit-cycle (overshoot, bounce, repeat) — damp on a score
-        # drop, recover while progressing
+        # WORKING targets are set from the current state, not the request:
+        # aim for AMBITION x whatever tube fits right now (floored near the
+        # request). Force magnitudes, repulsion range and smoothing then
+        # track the geometry instead of the ask — the dynamics are the same
+        # whether you requested a 14 or a 25 mm tube, and the design keeps
+        # opening up and smoothing PAST the request until it plateaus,
+        # instead of stopping at "barely satisfied" (pinched lobes)
+        est_tube = min(cur_gap / CLEARANCE_SAFETY, 2.0 * (1.0 / kmax) / BEND_SAFETY)
+        work_tube = AMBITION * est_tube  # purely state-relative: no request leak
+        work_gap = work_tube * CLEARANCE_SAFETY
+        work_bend = 0.5 * work_tube * BEND_SAFETY
+        kappa_limit = 1.0 / work_bend
+
+        # score every iteration (both metrics are already in hand). Primary:
+        # the REQUESTED tube (capped — beyond satisfied is not "better" for
+        # the guarantee); secondary: the absolute achievable tube, so the
+        # best state keeps improving after the request is met. Adapt the
+        # step gain on the continuous signal: constant gains limit-cycle
         cur_score = min(cur_gap / target_gap, (1.0 / kmax) / target_bend)
-        if cur_score < prev_score - 1e-4:
-            gain = max(gain * 0.6, 0.05)
+        # damp only on genuine degradation from the best state (a relative
+        # deadband — refit jitter must not strangle the step size)
+        if est_tube < 0.97 * best_est:
+            gain = max(gain * 0.7, 0.1)
         else:
-            gain = min(gain * 1.08, 1.0)
-        prev_score = cur_score
-        if cur_score > best_score + 1e-4:
+            gain = min(gain * 1.1, 1.0)
+        cur_key = (round(min(cur_score, 1.0), 4), round(est_tube, 2))
+        if cur_key > best_key:
+            best_key = cur_key
             best_score = cur_score
             best_gap, best_bend = cur_gap, 1.0 / kmax
+            best_est = est_tube
             best_comps = list(comps)
             stagnant = 0
         else:
             stagnant += 1
-        if cur_score >= 0.995 or stagnant >= patience:
+        if stagnant >= patience:
             done_at = it
             break
 
         # steer effort toward the BINDING constraint: a bend-limited knot
         # gets more un-kinking and less (interfering) repulsion, and vice
         # versa. balance > 0 means bend is the limiting factor.
-        r_gap = cur_gap / target_gap
-        r_bend = (1.0 / kmax) / target_bend
+        r_gap = cur_gap / work_gap
+        r_bend = (1.0 / kmax) / work_bend
         balance = float(np.clip(r_gap - r_bend, -1.0, 1.0))
         repulse_scale = 1.0 + 2.0 * max(0.0, -balance)
         bend_scale = 1.0 + 3.0 * max(0.0, balance)
@@ -222,7 +251,7 @@ def relax(
 
         # repulsion between close strand points
         tree = cKDTree(P)
-        pairs = tree.query_pairs(r=target_gap, output_type="ndarray")
+        pairs = tree.query_pairs(r=work_gap, output_type="ndarray")
         if len(pairs):
             i, jj = pairs[:, 0], pairs[:, 1]
             same = comp_id[i] == comp_id[jj]
@@ -237,7 +266,7 @@ def relax(
                 dist = np.linalg.norm(d, axis=1)
                 dist = np.maximum(dist, 1e-9)
                 push_f = (repulse_scale * REPULSE_GAIN
-                          * (target_gap - dist) / dist)[:, None] * d
+                          * (work_gap - dist) / dist)[:, None] * d
                 np.add.at(F, i, push_f)
                 np.add.at(F, jj, -push_f)
 
@@ -266,7 +295,7 @@ def relax(
             if hot.any():
                 khat = kv[hot] / kappa[hot, None]
                 F[off:off + per_comp[ci]][hot] -= (
-                    bend_scale * BEND_GAIN * target_bend**2
+                    bend_scale * BEND_GAIN * work_bend**2
                     * excess[hot, None] * khat
                 )
             # curve-shortening (Laplacian) flow: the most direct un-kinker
@@ -291,7 +320,7 @@ def relax(
         for ci in range(len(comps)):
             n_i = per_comp[ci]
             ds = comps[ci].total_length() / n_i
-            sigma_idx = (target_gap / 2.0) / ds
+            sigma_idx = (work_gap / 2.0) / ds
             F[off:off + n_i] = _smooth_circular(F[off:off + n_i], sigma_idx)
             off += n_i
 
@@ -336,8 +365,9 @@ def relax(
             check = FourierLink(components=comps, name=link.name, meta=link.meta)
             s, g, br = score_of(check)
             limiter = "bend" if br / target_bend < g / target_gap else "gap"
+            est = min(g / CLEARANCE_SAFETY, 2.0 * br / BEND_SAFETY)
             print(f"    relax {it:3d}: gap {g:6.1f} mm, bend r {br:6.1f} mm "
-                  f"({limiter}-limited, gain {gain:.2f})")
+                  f"(fits \u2300{est:.1f}, {limiter}-limited, gain {gain:.2f})")
 
     # whatever path exited the loop, give the final state a chance to win
     final = FourierLink(components=comps, name=link.name, meta=link.meta)

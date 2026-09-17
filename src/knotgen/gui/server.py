@@ -333,7 +333,7 @@ def api_mesh(payload: dict) -> tuple[str, bytes]:
 
     _, styled, _ = _styled_from_args(args)
     report = preflight(styled, tube_diameter=args.tube)
-    if not report.ok_for_tube:
+    if not report.ok_for_tube and not payload.get("force"):
         raise ValueError("tube does not fit — the mesh would self-intersect "
                          "(see the report; try --relax or a smaller tube)")
     verts, faces = design_mesh(styled, tube_diameter=args.tube)

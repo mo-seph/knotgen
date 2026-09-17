@@ -511,15 +511,21 @@ async function doDownloadJson() {
   });
 }
 
-async function doDownloadMesh() {
+async function doDownloadMesh(force = false) {
   await busy('meshbtn', 'Meshing…', async () => {
     const filename = outName('.stl');
     const r = await fetch('/api/mesh', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ argv: buildArgv(), filename }) });
+      body: JSON.stringify({ argv: buildArgv(), filename, force }) });
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
-      throw new Error(e.error || r.statusText);
+      const msg = e.error || r.statusText;
+      if (!force && /does not fit/.test(msg) &&
+          window.confirm('The tube does not fit — the mesh may ' +
+                         'self-intersect. Download it anyway?')) {
+        return doDownloadMesh(true);
+      }
+      throw new Error(msg);
     }
     saveBlob(await r.blob(), filename);
     reportMsg(`<pre class="ok">downloaded ${esc(filename)}</pre>`);
@@ -529,7 +535,7 @@ async function doDownloadMesh() {
 $('generate').addEventListener('click', generate);
 $('exportbtn').addEventListener('click', doExport);
 $('downloadbtn').addEventListener('click', doDownloadJson);
-$('meshbtn').addEventListener('click', doDownloadMesh);
+$('meshbtn').addEventListener('click', () => doDownloadMesh());
 $('knotname').addEventListener('keydown', e => { if (e.key === 'Enter') generate(); });
 $('copycmd').addEventListener('click', () =>
   navigator.clipboard.writeText($('cmd').textContent));

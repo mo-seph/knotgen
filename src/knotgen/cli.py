@@ -187,6 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--out", default=None, metavar="FILE",
                      help="write the JSON export (for the Fusion KnotImport script); "
                           "a bare filename goes into output/, move keepers to designs/")
+    gen.add_argument("--force", action="store_true",
+                     help="write --out / --mesh even when the tube check fails "
+                          "(useful when it's close): the JSON records the "
+                          "failing check, and a forced mesh may self-intersect")
     gen.add_argument("--preview", action="store_true", help="open a 3D preview window")
     gen.add_argument("--save-png", default=None, metavar="FILE",
                      help="save the preview as a PNG instead of opening a window "
@@ -220,6 +224,12 @@ def build_parser() -> argparse.ArgumentParser:
     chk.add_argument("file", help="a JSON file written by `knotgen gen --out`")
     chk.add_argument("--tube", type=float, default=None, metavar="MM",
                      help="tube/profile diameter to test against")
+    chk.add_argument("--mesh", default=None, metavar="FILE",
+                     help="also write a tube mesh (.stl/.obj) from the saved "
+                          "curve — e.g. reuse a parked --relax result without "
+                          "re-running the optimisation; needs --tube")
+    chk.add_argument("--force", action="store_true",
+                     help="write the mesh even when the tube check fails")
 
     prv = sub.add_parser(
         "preview",
@@ -434,8 +444,12 @@ def cmd_gen(args: argparse.Namespace) -> int:
               "   (check your strip's rated bend radius)")
 
     failed = args.tube is not None and not report.ok_for_tube
+    blocked = failed and not args.force
+    if failed and args.force and (args.out or args.mesh):
+        print("  ! tube does not fit, but --force writes anyway "
+              "(the export records the failing check)")
 
-    if args.out and not failed:
+    if args.out and not blocked:
         from knotgen.export import build_document, build_strip_section, export_json
 
         strip_sections = None
@@ -508,14 +522,15 @@ def cmd_gen(args: argparse.Namespace) -> int:
             print("  (--mount needs --strip for orientation frames; skipped)")
         out = export_json(_resolve_out(args.out), doc)
         print(f"  wrote {out}  (fit deviation {doc['checks']['fit_max_deviation_mm']} mm)")
-    elif args.out and failed:
-        print("  NOT exporting — tube does not fit (see above)")
+    elif args.out and blocked:
+        print("  NOT exporting — tube does not fit (see above; --force writes anyway)")
 
     if args.mesh and args.tube is None:
         print("  --mesh needs --tube (the diameter to sweep the mesh at)")
         return 1
-    if args.mesh and failed:
-        print("  NOT writing mesh — tube does not fit (see above)")
+    if args.mesh and blocked:
+        print("  NOT writing mesh — tube does not fit (see above; --force "
+              "writes anyway)")
     elif args.mesh:
         from knotgen.mesh import export_mesh
 
@@ -523,6 +538,35 @@ def cmd_gen(args: argparse.Namespace) -> int:
             _resolve_out(args.mesh), styled, tube_diameter=args.tube
         )
         print(f"  wrote {path}  ({n_tris} triangles)")
+
+    # a relax run is expensive — never let its result evaporate: if it
+    # didn't land in a requested --out, park the curve in output/ so it can
+    # be reused (check/preview/mesh) without re-running the optimisation
+    if args.relax and (not args.out or blocked):
+        import re as _re
+
+        from knotgen.export import build_document, export_json
+
+        import shlex
+
+        cli_options = {
+            k: v for k, v in vars(args).items()
+            if k not in ("command", "argv") and not k.startswith("_")
+        }
+        doc = build_document(
+            styled, report=report, fit_points=args.fit_points,
+            tube_diameter=args.tube,
+            command="knotgen " + shlex.join(getattr(args, "argv", [])),
+            cli_options=cli_options,
+        )
+        safe = _re.sub(r"[^\w.\-]+", "_", styled.name).strip("_")
+        scratch = export_json(_resolve_out(f"relaxed_{safe}.json"), doc)
+        print(f"  relaxed curve parked in {scratch} — reuse it without "
+              f"re-relaxing: `knotgen check {scratch} --tube D --mesh f.stl` "
+              f"or `knotgen preview {scratch}`")
+
+    if failed and args.force:
+        failed = False  # forced writes are an accepted outcome, exit clean
 
     if args.preview or args.save_png:
         from knotgen.viz import preview
@@ -592,7 +636,24 @@ def cmd_check(args: argparse.Namespace) -> int:
     print(f"{knot.name}  (from {args.file})")
     report = preflight(knot, tube_diameter=args.tube)
     print(report.summary())
-    return 1 if (args.tube is not None and not report.ok_for_tube) else 0
+    failed = args.tube is not None and not report.ok_for_tube
+
+    if args.mesh:
+        if args.tube is None:
+            print("  --mesh needs --tube (the diameter to sweep the mesh at)")
+            return 1
+        if failed and not args.force:
+            print("  NOT writing mesh — tube does not fit (--force writes anyway)")
+        else:
+            from knotgen.mesh import export_mesh
+
+            path, n_tris = export_mesh(
+                _resolve_out(args.mesh), knot, tube_diameter=args.tube
+            )
+            print(f"  wrote {path}  ({n_tris} triangles)")
+            if failed:
+                return 0  # forced: accepted outcome
+    return 1 if failed else 0
 
 
 def cmd_preview(args: argparse.Namespace) -> int:
