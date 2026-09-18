@@ -93,6 +93,8 @@ def relax_fixed_rope(
     polish_floor: float = 0.995,
     snapshot: Callable[[int, FourierLink, dict], None] | None = None,
     snapshot_every: int = 5,
+    hops: int = 0,
+    seed: int = 0,
 ) -> tuple[FourierKnot | FourierLink, dict]:
     """Return (relaxed design, info). See the module docstring.
 
@@ -100,6 +102,14 @@ def relax_fixed_rope(
     current length. rope_slack: extra fraction on top of the budget, for
     rounding crushed kinks (default 0.10). snapshot(it, link, metrics) is
     called every `snapshot_every` iterations and once at the end.
+
+    hops: basin hopping. The pushes are all perpendicular to the strand, so
+    a passage can never SLIDE along to relocate a crossing — the optimiser
+    is local. Each hop restarts from the best state with a random
+    low-harmonic (whole-arc scale, never wiggle scale) perturbation,
+    capped below half the strand gap so strands cannot pass through each
+    other, and the run continues; the best state is kept only if the hop
+    beats it. Costs iterations: pair with --relax-max.
     """
     from knotgen.geometry import max_curvature, min_clearance
     from knotgen.gm import tangent_point_radii
@@ -163,6 +173,24 @@ def relax_fixed_rope(
                   "rope_allow": round(rope_allow, 1), **extra})
 
     emit(0, comps, {"phase": "start"})
+    rng = np.random.default_rng(seed)
+    hops_done = 0
+
+    def perturb(cs, amplitude: float):
+        out = []
+        for c in cs:
+            a, b = c.a.copy(), c.b.copy()
+            for j in range(1, min(4, a.shape[1])):
+                scale = amplitude / j  # low harmonics only: whole-arc moves
+                a[:, j] += rng.normal(0.0, scale, 3)
+                b[:, j] += rng.normal(0.0, scale, 3)
+            k = FourierKnot(a=a, b=b, name=c.name, meta=c.meta)
+            if sym > 1:
+                k = _symmetry_projection(k, sym)
+            out.append(k)
+        w = FourierLink(components=out, name=link.name, meta=link.meta)
+        sc = width0 / w.extents()["xy_diameter"]
+        return w.scaled(sc, sc, sc).components
 
     for it in range(iterations):
         r_work = 0.5 * d_work * BEND_SAFETY * PRESSURE  # GM radius to push for
@@ -273,9 +301,29 @@ def relax_fixed_rope(
             stuck = 0
         else:
             stuck += 1
+        # rope grants are cheap and gradual: decide them on a shorter clock
+        if (stuck >= max(8, patience // 2) and hops_done >= hops
+                and rope_allow < rope_max * 0.999):
+            rope_allow = min(rope_allow * ROPE_GRANT, rope_max)
+            grants += 1
+            stuck = 0
+            phase = "grant-rope"
         phase = "inflate"
         if stuck >= patience:
-            if rope_allow < rope_max * 0.999:
+            if hops_done < hops:
+                # basin hop first when asked for: a whole-arc kick from the
+                # best state (under half the gap, so no strand can cross
+                # another in the kick) is a bigger move than +2% rope
+                hops_done += 1
+                comps = perturb(best["comps"], 0.35 * best["gap"])
+                score, gap, bend, est = measure(comps)
+                d_work = est
+                stuck = 0
+                phase = f"hop-{hops_done}"
+                if verbose:
+                    print(f"    hop {hops_done}/{hops}: kicked the best state "
+                          f"(fits \u2300{best['est']:.1f}) to \u2300{est:.1f}")
+            elif rope_allow < rope_max * 0.999:
                 rope_allow = min(rope_allow * ROPE_GRANT, rope_max)
                 grants += 1
                 stuck = 0
@@ -317,6 +365,7 @@ def relax_fixed_rope(
         "length_before": round(length0, 1),
         "length_after": round(total_length(result_comps), 1),
         "rope_budget": round(rope_max, 1), "rope_grants": grants,
+        "hops": hops_done,
         "converged": bool(gap1 >= 0.99 * target_gap and bend1 >= 0.99 * target_bend),
         "max_tube_est": round(min(2.0 * bend1 / 1.1, gap1 / 1.05), 1),
         "polish": polish_info,

@@ -90,3 +90,48 @@ def test_gui_async_job_reports_progress():
     assert p["status"] == "done", p.get("error")
     assert p["result"]["name"] == "3_1"
     assert snaps >= 5
+
+
+def test_basin_hops_run_and_keep_best():
+    k = apply_style(resolve("3_1"), width=150, depth=15)
+    base, _ = relax(k, tube=8, method="sono", iterations=40)
+    hopped, info = relax(k, tube=8, method="sono", iterations=120, hops=2,
+                         rope_slack=0.0)
+    assert info["hops"] >= 1
+    # the best-state guarantee survives hopping
+    assert preflight(hopped).max_tube_diameter_mm >= preflight(base).max_tube_diameter_mm * 0.98
+
+
+def test_cli_relax_gif(tmp_path, monkeypatch):
+    from knotgen.cli import main
+
+    monkeypatch.chdir(tmp_path)
+    main(["3_1", "--width", "150", "--depth", "15", "--tube", "8", "--relax",
+          "--relax-iterations", "10", "--snapshot-every", "5",
+          "--relax-gif", "relax.gif"])
+    gif = tmp_path / "output" / "relax.gif"
+    assert gif.exists() and gif.read_bytes()[:6] in (b"GIF87a", b"GIF89a")
+
+
+def test_gui_timeline_gif_and_keep_state():
+    import time
+
+    from knotgen.gui.server import (api_generate_start, api_gif, api_progress,
+                                    api_snapshots, api_use_snapshot)
+
+    argv = ["3_1", "--width", "150", "--tube", "8", "--relax",
+            "--relax-iterations", "10", "--snapshot-every", "5"]
+    job = api_generate_start({"argv": argv})["job"]
+    for _ in range(300):
+        p = api_progress(job)
+        if p["status"] != "running":
+            break
+        time.sleep(0.1)
+    assert p["status"] == "done", p.get("error")
+    snaps = api_snapshots(job)["snapshots"]
+    assert len(snaps) >= 3 and all("components" in s for s in snaps)
+    name, data = api_gif(job)
+    assert name.endswith(".gif") and data[:6] in (b"GIF87a", b"GIF89a")
+    chosen = api_use_snapshot({"job": job, "index": 1})
+    assert chosen["name"] == "3_1"
+    assert chosen["relax"]["snapshot_iteration"] == snaps[1]["iteration"]

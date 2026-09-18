@@ -166,6 +166,16 @@ def build_parser() -> argparse.ArgumentParser:
                           "natural length, as a fraction (default 0.10) — a "
                           "little is needed to round crushed kinks; a lot "
                           "becomes wiggle")
+    gen.add_argument("--relax-hops", type=int, default=0, metavar="N",
+                     help="sono: basin hopping — when stuck, restart from the "
+                          "best state with a random whole-arc kick (under half "
+                          "the strand gap, so topology is safe) up to N times; "
+                          "escapes the local minima a purely local optimiser "
+                          "can't (a passage never slides along to relocate a "
+                          "crossing on its own). Pair with --relax-max")
+    gen.add_argument("--relax-gif", default=None, metavar="FILE",
+                     help="write a looping animated GIF of the relax "
+                          "(one frame per --snapshot-every iterations)")
     gen.add_argument("--relax-snapshots", default=None, metavar="DIR",
                      help="write a PNG of the design every --snapshot-every "
                           "relax iterations into DIR (plus trace.json with "
@@ -351,6 +361,7 @@ class _snapshot_writer:
         self.name = re.sub(r"[^\w.\-]+", "_", name).strip("_")
         self.tube = tube
         self.trace: list[dict] = []
+        self.frames: list[str] = []
         self.count = 0
         self._json = _json
 
@@ -365,6 +376,7 @@ class _snapshot_writer:
         preview(link, tube_diameter=self.tube, save=str(path), show=False,
                 title=title)
         self.trace.append({**metrics, "png": path.name})
+        self.frames.append(str(path))
         self.count += 1
 
     def finish(self) -> None:
@@ -523,6 +535,11 @@ def cmd_gen(args: argparse.Namespace) -> int:
         if args.relax_snapshots:
             snapshot_cb = _snapshot_writer(args.relax_snapshots, styled.name,
                                            args.tube)
+        elif args.relax_gif:
+            import tempfile
+
+            snapshot_cb = _snapshot_writer(
+                tempfile.mkdtemp(prefix="knotgen_gif_"), styled.name, args.tube)
         styled, info = relax(
             styled,
             tube=args.tube,
@@ -537,11 +554,18 @@ def cmd_gen(args: argparse.Namespace) -> int:
             rope_slack=args.rope_slack,
             snapshot=snapshot_cb,
             snapshot_every=args.snapshot_every,
+            hops=args.relax_hops,
         )
         if snapshot_cb is not None:
             snapshot_cb.finish()
-            print(f"  snapshots: {snapshot_cb.count} PNGs + trace.json in "
-                  f"{args.relax_snapshots}")
+            if args.relax_snapshots:
+                print(f"  snapshots: {snapshot_cb.count} PNGs + trace.json in "
+                      f"{args.relax_snapshots}")
+            if args.relax_gif:
+                from knotgen.viz import frames_to_gif
+
+                gif = frames_to_gif(snapshot_cb.frames, _resolve_out(args.relax_gif))
+                print(f"  wrote {gif}  ({snapshot_cb.count} frames, looping)")
         if "length_after" in info:
             print(f"  rope: {info['length_before']:.0f} -> {info['length_after']:.0f} mm "
                   f"(budget {info['rope_budget']:.0f}, {info['rope_grants']} grants)")

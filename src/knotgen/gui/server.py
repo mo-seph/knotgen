@@ -128,7 +128,7 @@ def _styled_from_args(args, snapshot=None, snapshot_every=5):
             polish_floor=1.0 - min(max(args.polish_budget, 0.0), 30.0) / 100.0,
             anneal_from=anneal_from, rope_budget=rope_budget,
             rope_slack=args.rope_slack, snapshot=snapshot,
-            snapshot_every=snapshot_every,
+            snapshot_every=snapshot_every, hops=args.relax_hops,
         )
         relax_info = {k: (float(v) if hasattr(v, "item") or isinstance(v, float) else v)
                       for k, v in relax_info.items()}
@@ -481,7 +481,8 @@ def api_generate_start(payload: dict) -> dict:
     job_id = uuid.uuid4().hex[:12]
     with _JOBS_LOCK:
         _JOBS[job_id] = {"status": "running", "snapshot": None, "result": None,
-                         "error": None}
+                         "error": None, "snapshots": [],
+                         "argv": [str(a) for a in (payload.get("argv") or [])]}
         if len(_JOBS) > 16:
             for k in list(_JOBS)[:-16]:
                 _JOBS.pop(k, None)
@@ -490,6 +491,7 @@ def api_generate_start(payload: dict) -> dict:
         snap = {**metrics, "components": _snapshot_points(link)}
         with _JOBS_LOCK:
             _JOBS[job_id]["snapshot"] = snap
+            _JOBS[job_id]["snapshots"].append({**snap, "_link": link})
 
     def run():
         try:
@@ -505,12 +507,86 @@ def api_generate_start(payload: dict) -> dict:
     return {"job": job_id}
 
 
+def _job(job_id: str) -> dict:
+    job = _JOBS.get(job_id)
+    if job is None:
+        raise ValueError(f"no such job {job_id!r}")
+    return job
+
+
 def api_progress(job_id: str) -> dict:
     with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-        if job is None:
-            raise ValueError(f"no such job {job_id!r}")
-        return dict(job)
+        job = _job(job_id)
+        return {"status": job["status"], "snapshot": job["snapshot"],
+                "result": job["result"], "error": job["error"],
+                "count": len(job["snapshots"])}
+
+
+def api_snapshots(job_id: str) -> dict:
+    """Every snapshot of a finished job (points + metrics) — the timeline."""
+    with _JOBS_LOCK:
+        job = _job(job_id)
+        snaps = [{k: v for k, v in sn.items() if k != "_link"}
+                 for sn in job["snapshots"]]
+    return {"snapshots": snaps}
+
+
+def api_gif(job_id: str) -> tuple[str, bytes]:
+    """Looping GIF of a job's snapshots, rendered with the matplotlib viewer."""
+    import tempfile
+    from pathlib import Path as _P
+
+    from knotgen.viz import frames_to_gif, preview
+
+    with _JOBS_LOCK:
+        job = _job(job_id)
+        snaps = list(job["snapshots"])
+        argv = list(job["argv"])
+    if not snaps:
+        raise ValueError("this job has no snapshots")
+    args = _parse_gen_argv(argv)
+    with tempfile.TemporaryDirectory() as td:
+        paths = []
+        for i, sn in enumerate(snaps):
+            pth = _P(td) / f"f{i:03d}.png"
+            title = (f"it {sn.get('iteration', i)}: fits \u2300{sn.get('fits', '?')} "
+                     f"rope {sn.get('length', '?')} mm [{sn.get('phase', '')}]")
+            preview(sn["_link"], tube_diameter=args.tube, save=str(pth), show=False,
+                    title=title)
+            paths.append(str(pth))
+        gif = _P(td) / "relax.gif"
+        frames_to_gif(paths, gif)
+        data = gif.read_bytes()
+    name = _safe_filename(f"{snaps[-1]['_link'].name}_relax.gif", ".gif")
+    return name, data
+
+
+def api_use_snapshot(payload: dict) -> dict:
+    """Make a chosen snapshot THE design for its command: downloads and
+    exports then serve that state (recorded with its iteration)."""
+    job_id = str(payload.get("job") or "")
+    index = int(payload.get("index", -1))
+    with _JOBS_LOCK:
+        job = _job(job_id)
+        if not 0 <= index < len(job["snapshots"]):
+            raise ValueError("snapshot index out of range")
+        sn = job["snapshots"][index]
+        argv = list(job["argv"])
+    key = tuple(argv)
+    cached = _DESIGN_CACHE.get(key) or _design_for(argv)
+    args, knot, styled, relax_info, polish_info = cached
+    link = sn["_link"]
+    if len(link.components) == 1:
+        chosen = link.components[0]
+        chosen.name = styled.name
+        chosen.meta = dict(getattr(styled, "meta", {}) or {})
+    else:
+        chosen = link
+    note = dict(relax_info or {})
+    note["snapshot_iteration"] = sn.get("iteration")
+    note["note"] = "intermediate relax state chosen from the timeline"
+    _DESIGN_CACHE[key] = (args, knot, chosen, note, polish_info)
+    return _generate_response({"argv": argv}, args, knot, chosen, note, polish_info)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -542,6 +618,23 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(api_progress(self.path.rsplit("/", 1)[1]))
             except ValueError as exc:
                 self._json({"error": str(exc)}, status=404)
+        elif self.path.startswith("/api/snapshots/"):
+            try:
+                self._json(api_snapshots(self.path.rsplit("/", 1)[1]))
+            except ValueError as exc:
+                self._json({"error": str(exc)}, status=404)
+        elif self.path.startswith("/api/gif/"):
+            try:
+                name, body = api_gif(self.path.rsplit("/", 1)[1])
+            except ValueError as exc:
+                self._json({"error": str(exc)}, status=404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/gif")
+            self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif self.path.startswith("/api/doc/"):
             try:
                 self._json(api_doc(self.path.rsplit("/", 1)[1]))
@@ -562,6 +655,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(api_generate(payload))
             elif self.path == "/api/generate_async":
                 self._json(api_generate_start(payload))
+            elif self.path == "/api/use_snapshot":
+                self._json(api_use_snapshot(payload))
             elif self.path == "/api/thumbs":
                 self._json(api_thumbs(payload))
             elif self.path == "/api/export":

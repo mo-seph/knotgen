@@ -85,6 +85,25 @@ def _tube_mesh(
     return surf[..., 0], surf[..., 1], surf[..., 2]
 
 
+def frames_to_gif(png_paths, out_path, width: int = 640, frame_ms: int = 160,
+                  hold_ms: int = 1400) -> str:
+    """Assemble PNG frames into a looping GIF (last frame held longer)."""
+    from PIL import Image
+
+    frames = []
+    for pth in png_paths:
+        im = Image.open(pth).convert("RGB")
+        h = int(im.height * width / im.width)
+        frames.append(im.resize((width, h), Image.LANCZOS).quantize(colors=128))
+    if not frames:
+        raise ValueError("no frames to write")
+    durations = [frame_ms] * len(frames)
+    durations[-1] = hold_ms
+    frames[0].save(str(out_path), save_all=True, append_images=frames[1:],
+                   duration=durations, loop=0, optimize=False)
+    return str(out_path)
+
+
 def _autocrop(path: str, pad: int = 24) -> None:
     """Trim white margins from a saved PNG (clean mode leaves the invisible
     3D axes' full extent as border)."""

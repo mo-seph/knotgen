@@ -64,6 +64,10 @@
   #viewtoggles { top: 10px; right: 10px; display: flex; flex-direction: column; gap: 4px; }
   #viewtoggles label { display: flex; gap: 6px; align-items: center; color: var(--dim); cursor: pointer; }
   #report { bottom: 10px; left: 10px; right: 10px; max-height: 34%; overflow-y: auto; }
+  #timeline { top: 10px; left: 50%; transform: translateX(-50%); display: flex;
+              gap: 8px; align-items: center; white-space: nowrap; }
+  #timeline input[type=range] { width: 220px; accent-color: var(--accent); }
+  #timeline .tl { color: var(--dim); min-width: 150px; }
   #report pre { margin: 0; font: 11px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
   #report .warn { color: var(--accent); }
   #report .bad { color: var(--bad); }
@@ -154,6 +158,7 @@
       <div class="row"><label for="relaxmethod">method</label>
         <select id="relaxmethod" title="sono = fixed rope (inflate the tube, never the rope); gm/forces = earlier dynamics"><option>sono</option><option>gm</option><option>forces</option></select></div>
       <div class="row"><label for="ropeslack" title="sono: extra rope beyond the design's length the relax may use (fraction). A little rounds crushed kinks; a lot becomes wiggle">rope slack</label><input id="ropeslack" type="number" value="0.10" step="0.05" min="0" max="1"/></div>
+      <div class="row"><label for="relaxhops" title="basin hopping: when stuck, restart from the best state with a random whole-arc kick, up to N times (escapes local minima; pair with push hard)">basin hops</label><input id="relaxhops" type="number" value="0" step="1" min="0" max="20"/></div>
       <div class="row"><label for="relaxmax">push hard (--relax-max)</label><input id="relaxmax" type="checkbox"/></div>
       <div class="hint">relax needs a tube diameter and can take a while; it holds
         your depth by default — max depth 0 = unlimited</div>
@@ -208,6 +213,13 @@
     <label><input id="spin" type="checkbox"/> spin</label>
   </div>
   <div id="report" class="overlay hidden"></div>
+  <div id="timeline" class="overlay hidden">
+    <span>timeline</span>
+    <input id="tlrange" type="range" min="0" max="0" value="0"/>
+    <span class="tl" id="tllabel"></span>
+    <button id="tlkeep" title="make this intermediate state THE design: downloads and exports serve it">keep this state</button>
+    <button id="tlgif" title="looping GIF of the whole relax">Download GIF</button>
+  </div>
   <div id="browse" class="hidden">
     <button id="browseclose">✕ close</button>
     <h2>Catalogue</h2>
@@ -386,6 +398,7 @@ function buildArgv() {
     if (num('relaxmaxdepth') !== null) a.push('--relax-max-depth', num('relaxmaxdepth'));
     if ($('relaxmethod').value !== 'sono') a.push('--relax-method', $('relaxmethod').value);
     add('--rope-slack', 'ropeslack', 0.1);
+    add('--relax-hops', 'relaxhops', 0);
     if (num('relaxanneal') !== null) a.push('--relax-anneal', num('relaxanneal'));
     if ($('relaxmax').checked) a.push('--relax-max');
   }
@@ -527,8 +540,10 @@ async function generate() {
         if (p.status === 'error') throw new Error(p.error || 'relax failed');
         if (p.status === 'done') { data = p.result; break; }
       }
+      await loadTimeline(job, data, name);
     } else {
       data = await post('/api/generate', { argv });
+      $('timeline').classList.add('hidden');
     }
     buildScene(data);
     showStats(data);
@@ -573,6 +588,61 @@ async function doExport(force = false) {
   }
   btn.disabled = false; btn.textContent = 'Export JSON';
 }
+
+// ---------- optimisation timeline ----------
+let tlState = null;  // { job, snaps, final, name }
+
+async function loadTimeline(job, finalData, name) {
+  const { snapshots } = await fetch('/api/snapshots/' + job).then(r => r.json());
+  if (!snapshots || snapshots.length < 2) { $('timeline').classList.add('hidden'); return; }
+  tlState = { job, snaps: snapshots, final: finalData, name };
+  const r = $('tlrange');
+  r.max = snapshots.length;  // last position = the final (best + polished) result
+  r.value = snapshots.length;
+  $('timeline').classList.remove('hidden');
+  showTimelineIndex(snapshots.length);
+}
+
+function showTimelineIndex(i) {
+  if (!tlState) return;
+  const n = tlState.snaps.length;
+  if (i >= n) {
+    $('tllabel').textContent = 'final result';
+    buildScene(tlState.final); showStats(tlState.final); showReport(tlState.final);
+    return;
+  }
+  const sn = tlState.snaps[i];
+  $('tllabel').textContent = `it ${sn.iteration} · fits ⌀${sn.fits}` +
+    (sn.length ? ` · rope ${Math.round(sn.length)}` : '') + ` [${sn.phase || ''}]`;
+  buildScene({ name: tlState.name, components: sn.components,
+               tube_mm: tlState.final.tube_mm, strips: null, tight_spots: [] });
+  reportMsg(`<pre>snapshot ${i + 1}/${n} — iteration ${sn.iteration} [${esc(sn.phase || '')}]: ` +
+    `fits ⌀${sn.fits} · bend r ${sn.bend} · gap ${sn.gap} mm` +
+    (sn.length ? ` · rope ${sn.length} mm` : '') + `</pre>`);
+}
+
+$('tlrange').addEventListener('input', () => showTimelineIndex(Number($('tlrange').value)));
+$('tlkeep').addEventListener('click', async () => {
+  if (!tlState) return;
+  const i = Number($('tlrange').value);
+  if (i >= tlState.snaps.length) { reportMsg('<pre>the final result is already the design</pre>'); return; }
+  await busy('tlkeep', 'Keeping…', async () => {
+    const data = await post('/api/use_snapshot', { job: tlState.job, index: i });
+    tlState.final = data;
+    buildScene(data); showStats(data); showReport(data);
+    reportMsg($('report').innerHTML +
+      `<pre class="ok">iteration ${tlState.snaps[i].iteration} is now the design — downloads and exports serve it</pre>`);
+  });
+});
+$('tlgif').addEventListener('click', async () => {
+  if (!tlState) return;
+  await busy('tlgif', 'Rendering…', async () => {
+    const r = await fetch('/api/gif/' + tlState.job);
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.statusText); }
+    saveBlob(await r.blob(), outName('_relax.gif'));
+    reportMsg('<pre class="ok">downloaded the relax GIF</pre>');
+  });
+});
 
 function saveBlob(blob, filename) {
   const a = document.createElement('a');

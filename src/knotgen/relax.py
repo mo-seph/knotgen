@@ -214,6 +214,7 @@ def relax(
     rope_slack: float = 0.10,
     snapshot=None,
     snapshot_every: int = 5,
+    hops: int = 0,
 ) -> tuple[FourierKnot | FourierLink, dict]:
     """Return (relaxed design, info). Sizes in mm; run AFTER apply_style.
 
@@ -245,7 +246,7 @@ def relax(
             design, tube, iterations=iterations, max_depth=max_depth,
             push=push, verbose=verbose, rope_budget=rope_budget,
             rope_slack=rope_slack, polish_floor=polish_floor,
-            snapshot=snapshot, snapshot_every=snapshot_every,
+            snapshot=snapshot, snapshot_every=snapshot_every, hops=hops,
         )
     from knotgen.geometry import max_curvature, min_clearance
 
