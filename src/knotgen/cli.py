@@ -140,6 +140,12 @@ def build_parser() -> argparse.ArgumentParser:
                           "when you gave one (an explicit depth is a design "
                           "decision), otherwise unlimited; 0 = explicitly "
                           "unlimited")
+    gen.add_argument("--relax-method", choices=["gm", "forces"], default="gm",
+                     help="relaxation force law: 'gm' (default) = one unified "
+                          "force from the Gonzalez-Maddocks tangent-point "
+                          "radius (bend relief and strand repulsion as limits "
+                          "of the same quantity); 'forces' = the earlier "
+                          "separate repulsion + bend-relief pair")
     gen.add_argument("--relax-max", action="store_true",
                      help="push the relaxation much harder: bigger iteration "
                           "budget and more patience before declaring a plateau")
@@ -429,6 +435,7 @@ def cmd_gen(args: argparse.Namespace) -> int:
             max_depth=relax_max_depth,
             push=args.relax_max,
             verbose=True,
+            method=args.relax_method,
         )
         print(f"  relaxed in {info['iterations']} iterations: "
               f"strand gap {info['gap_before']:g} -> {info['gap_after']:g} mm, "

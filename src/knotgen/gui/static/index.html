@@ -147,6 +147,8 @@
       <div class="row"><label for="relax">relax clearance</label><input id="relax" type="checkbox"/></div>
       <div class="row"><label for="relaxiter">max iterations</label><input id="relaxiter" type="number" value="150" step="50"/></div>
       <div class="row"><label for="relaxmaxdepth">max depth mm</label><input id="relaxmaxdepth" type="number" step="5" placeholder="= depth"/></div>
+      <div class="row"><label for="relaxmethod">method</label>
+        <select id="relaxmethod"><option>gm</option><option>forces</option></select></div>
       <div class="row"><label for="relaxmax">push hard (--relax-max)</label><input id="relaxmax" type="checkbox"/></div>
       <div class="hint">relax needs a tube diameter and can take a while; it holds
         your depth by default — max depth 0 = unlimited</div>
@@ -352,6 +354,7 @@ function buildArgv() {
     a.push('--relax');
     add('--relax-iterations', 'relaxiter', 150);
     if (num('relaxmaxdepth') !== null) a.push('--relax-max-depth', num('relaxmaxdepth'));
+    if ($('relaxmethod').value !== 'gm') a.push('--relax-method', $('relaxmethod').value);
     if ($('relaxmax').checked) a.push('--relax-max');
   }
   if (num('strip') !== null) {

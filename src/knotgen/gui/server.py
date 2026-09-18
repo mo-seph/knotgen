@@ -113,6 +113,7 @@ def _styled_from_args(args):
         styled, relax_info = relax(
             styled, tube=args.tube, iterations=args.relax_iterations,
             max_depth=max_depth, push=args.relax_max, verbose=False,
+            method=args.relax_method,
         )
         relax_info = {k: (float(v) if hasattr(v, "item") or isinstance(v, float) else v)
                       for k, v in relax_info.items()}

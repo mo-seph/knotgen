@@ -58,6 +58,7 @@ LAPLACE_GAIN = 0.8
 LAPLACE_FLOOR = 0.15  # fairing is always on a little: wobble control
 LENGTH_SLACK = 1.05  # extra shortening kicks in beyond this length growth
 DEPTH_GAIN = 0.6  # soft pull back inside the z budget
+GM_GAIN = 0.3  # tangent-point force strength (method='gm')
 AMBITION = 2.0  # working target = this x currently-achievable tube
 
 
@@ -131,6 +132,7 @@ def relax(
     max_depth: float | None = None,
     push: bool = False,
     verbose: bool = False,
+    method: str = "forces",
 ) -> tuple[FourierKnot | FourierLink, dict]:
     """Return (relaxed design, info). Sizes in mm; run AFTER apply_style.
 
@@ -141,6 +143,14 @@ def relax(
 
     max_depth: keep the design's z extent within this budget (mm) while
     relaxing. push: grind much harder (more iterations, more patience).
+
+    method: 'forces' (default) = the tuned repulsion + bend-relief pair;
+    'gm' = one unified force from the Gonzalez-Maddocks tangent-point
+    radius (see gm.py) — every pair whose tangent circle is tighter than
+    the working radius gets pushed perpendicular to the tangent, which IS
+    bend relief in the near limit and passage repulsion in the far limit,
+    with no exclusion windows. Both methods share the scoring, fairing,
+    depth budget, step caps and best-state guarantee.
     """
     from knotgen.geometry import max_curvature, min_clearance
 
@@ -256,26 +266,58 @@ def relax(
         F_rep = np.zeros_like(P)
         F_bend = np.zeros_like(P)
 
-        # repulsion between close strand points
-        tree = cKDTree(P)
-        pairs = tree.query_pairs(r=work_gap, output_type="ndarray")
-        if len(pairs):
-            i, jj = pairs[:, 0], pairs[:, 1]
-            same = comp_id[i] == comp_id[jj]
-            gap_idx = np.abs(idx[i] - idx[jj])
-            n_arr = np.array([per_comp[c] for c in comp_id[i]])
-            gap_idx = np.minimum(gap_idx, n_arr - gap_idx)
-            w_arr = np.array([w_idx[c] for c in comp_id[i]])
-            keep = ~(same & (gap_idx <= w_arr))
-            i, jj = i[keep], jj[keep]
-            if len(i):
-                d = P[i] - P[jj]
-                dist = np.linalg.norm(d, axis=1)
-                dist = np.maximum(dist, 1e-9)
-                push_f = (repulse_scale * REPULSE_GAIN
-                          * (work_gap - dist) / dist)[:, None] * d
-                np.add.at(F_rep, i, push_f)
-                np.add.at(F_rep, jj, -push_f)
+        if method == "gm":
+            # ONE unified force from the tangent-point radius: any pair
+            # whose tangent circle is tighter than the working radius gets
+            # pushed apart perpendicular to the tangent. Near-neighbour
+            # pairs make this bend relief; doubled-back passages make it
+            # repulsion — same law, no windows (see gm.py)
+            from knotgen.gm import tangent_point_radii
+
+            T_all = np.vstack([
+                (lambda d1: d1 / np.linalg.norm(d1, axis=1, keepdims=True))(
+                    comp.deriv(ts[ci], 1))
+                for ci, comp in enumerate(comps)
+            ])
+            tree = cKDTree(P)
+            pairs = tree.query_pairs(r=2.0 * work_bend, output_type="ndarray")
+            if len(pairs):
+                i, jj = pairs[:, 0], pairs[:, 1]
+                same = comp_id[i] == comp_id[jj]
+                gap_idx = np.abs(idx[i] - idx[jj])
+                n_arr = np.array([per_comp[c] for c in comp_id[i]])
+                gap_idx = np.minimum(gap_idx, n_arr - gap_idx)
+                keep = ~(same & (gap_idx <= 2))
+                i, jj = i[keep], jj[keep]
+                for x, y in ((i, jj), (jj, i)):
+                    r_tp, u = tangent_point_radii(P, T_all, x, y)
+                    viol = r_tp < work_bend
+                    if viol.any():
+                        f = (GM_GAIN * (work_bend - r_tp[viol]))[:, None] \
+                            * u[viol]
+                        np.add.at(F_bend, y[viol], f)
+                        np.add.at(F_bend, x[viol], -f)
+        else:
+            # repulsion between close strand points
+            tree = cKDTree(P)
+            pairs = tree.query_pairs(r=work_gap, output_type="ndarray")
+            if len(pairs):
+                i, jj = pairs[:, 0], pairs[:, 1]
+                same = comp_id[i] == comp_id[jj]
+                gap_idx = np.abs(idx[i] - idx[jj])
+                n_arr = np.array([per_comp[c] for c in comp_id[i]])
+                gap_idx = np.minimum(gap_idx, n_arr - gap_idx)
+                w_arr = np.array([w_idx[c] for c in comp_id[i]])
+                keep = ~(same & (gap_idx <= w_arr))
+                i, jj = i[keep], jj[keep]
+                if len(i):
+                    d = P[i] - P[jj]
+                    dist = np.linalg.norm(d, axis=1)
+                    dist = np.maximum(dist, 1e-9)
+                    push_f = (repulse_scale * REPULSE_GAIN
+                              * (work_gap - dist) / dist)[:, None] * d
+                    np.add.at(F_rep, i, push_f)
+                    np.add.at(F_rep, jj, -push_f)
 
         # fairing weight: a floor of gentle curve-shortening is ALWAYS on
         # (repulsion pumps arc length into the curve, and surplus length in
@@ -287,27 +329,28 @@ def relax(
             + 2.0 * max(len_ratio - LENGTH_SLACK, 0.0)
         )
 
-        # bend relief: push away from the centre of curvature where too tight
+        # bend relief: push away from the centre of curvature where too
+        # tight (the 'forces' method only — GM's tangent-point force
+        # already carries bend relief as its near limit)
         off = 0
         for ci, comp in enumerate(comps):
             t = ts[ci]
             n_i = per_comp[ci]
-            d1 = comp.deriv(t, 1)
-            d2 = comp.deriv(t, 2)
-            sp2 = np.sum(d1 * d1, axis=1, keepdims=True)
-            T = d1 / np.sqrt(sp2)
-            kv = (d2 - np.sum(d2 * T, axis=1, keepdims=True) * T) / sp2
-            kappa = np.linalg.norm(kv, axis=1)
-            excess = np.maximum(kappa - kappa_limit, 0.0)
-            hot = excess > 0
-            hot_mask = np.zeros(n_i)
-            if hot.any():
-                khat = kv[hot] / kappa[hot, None]
-                F_bend[off:off + n_i][hot] -= (
-                    bend_scale * BEND_GAIN * work_bend**2
-                    * excess[hot, None] * khat
-                )
-                hot_mask[hot] = 1.0
+            if method != "gm":
+                d1 = comp.deriv(t, 1)
+                d2 = comp.deriv(t, 2)
+                sp2 = np.sum(d1 * d1, axis=1, keepdims=True)
+                T = d1 / np.sqrt(sp2)
+                kv = (d2 - np.sum(d2 * T, axis=1, keepdims=True) * T) / sp2
+                kappa = np.linalg.norm(kv, axis=1)
+                excess = np.maximum(kappa - kappa_limit, 0.0)
+                hot = excess > 0
+                if hot.any():
+                    khat = kv[hot] / kappa[hot, None]
+                    F_bend[off:off + n_i][hot] -= (
+                        bend_scale * BEND_GAIN * work_bend**2
+                        * excess[hot, None] * khat
+                    )
             # curve-shortening (Laplacian) flow: the most direct un-kinker
             # and the only force that removes surplus length (see lap_w)
             Pc = P[off:off + n_i]
