@@ -132,6 +132,19 @@ def _styled_from_args(args, snapshot=None, snapshot_every=5):
         )
         relax_info = {k: (float(v) if hasattr(v, "item") or isinstance(v, float) else v)
                       for k, v in relax_info.items()}
+        # park the relaxed curve like the CLI does: the in-memory design
+        # cache dies with the server process, output/ does not
+        try:
+            from knotgen.checks import preflight
+            from knotgen.cli import _resolve_out, assemble_document
+            from knotgen.export import export_json
+
+            safe = re.sub(r"[^\w.\-]+", "_", styled.name).strip("_")
+            doc = assemble_document(styled, preflight(styled, tube_diameter=args.tube),
+                                    args, None)
+            export_json(_resolve_out(f"relaxed_{safe}.json"), doc)
+        except Exception:
+            pass  # parking is a convenience, never a failure
 
     if args.squeeze_to:
         from knotgen.link import as_link as _al

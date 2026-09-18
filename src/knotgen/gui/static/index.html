@@ -152,7 +152,8 @@
       <div class="row"><label for="relaxanneal" title="style at F x depth, tighten gradually during relax — smooth low-frequency fixes instead of wiggle">anneal depth ×</label><input id="relaxanneal" type="number" step="0.1" min="1" max="3" placeholder="off"/></div>
       <div class="row"><label for="squeezeto" title="after relax/polish: scale z down to this depth and re-polish (fit gently, squash a little)">squeeze to mm</label><input id="squeezeto" type="number" step="5" placeholder="off"/></div>
       <div class="row"><label for="relaxmethod">method</label>
-        <select id="relaxmethod"><option>gm</option><option>forces</option></select></div>
+        <select id="relaxmethod" title="sono = fixed rope (inflate the tube, never the rope); gm/forces = earlier dynamics"><option>sono</option><option>gm</option><option>forces</option></select></div>
+      <div class="row"><label for="ropeslack" title="sono: extra rope beyond the design's length the relax may use (fraction). A little rounds crushed kinks; a lot becomes wiggle">rope slack</label><input id="ropeslack" type="number" value="0.10" step="0.05" min="0" max="1"/></div>
       <div class="row"><label for="relaxmax">push hard (--relax-max)</label><input id="relaxmax" type="checkbox"/></div>
       <div class="hint">relax needs a tube diameter and can take a while; it holds
         your depth by default — max depth 0 = unlimited</div>
@@ -383,7 +384,8 @@ function buildArgv() {
     a.push('--relax');
     add('--relax-iterations', 'relaxiter', 150);
     if (num('relaxmaxdepth') !== null) a.push('--relax-max-depth', num('relaxmaxdepth'));
-    if ($('relaxmethod').value !== 'gm') a.push('--relax-method', $('relaxmethod').value);
+    if ($('relaxmethod').value !== 'sono') a.push('--relax-method', $('relaxmethod').value);
+    add('--rope-slack', 'ropeslack', 0.1);
     if (num('relaxanneal') !== null) a.push('--relax-anneal', num('relaxanneal'));
     if ($('relaxmax').checked) a.push('--relax-max');
   }
@@ -447,9 +449,16 @@ function showReport(data) {
     parts.push(`<pre class="${cls}">${esc(data.report.summary)}</pre>`);
   }
   if (data.relax) {
-    parts.push(`<pre>relaxed in ${data.relax.iterations} iterations: gap ` +
+    parts.push(`<pre>relaxed in ${data.relax.iterations} iterations (${data.relax.method || 'gm'}): gap ` +
       `${data.relax.gap_before.toFixed(1)} → ${data.relax.gap_after.toFixed(1)} mm, ` +
       `bend r ${data.relax.bend_before.toFixed(1)} → ${data.relax.bend_after.toFixed(1)} mm</pre>`);
+    if (data.relax.length_after !== undefined) {
+      const r = data.relax;
+      parts.push(`<pre>rope ${r.length_before.toFixed(0)} → ${r.length_after.toFixed(0)} mm ` +
+        `(budget ${r.rope_budget.toFixed(0)}, ${r.rope_grants} grant${r.rope_grants === 1 ? '' : 's'}` +
+        (r.rope_grants > 0 && r.length_after >= r.rope_budget * 0.995 ? ' — budget exhausted, raise rope slack for more' : '') +
+        `)</pre>`);
+    }
   }
   const p = (data.relax && data.relax.polish) || data.polish;
   if (p && p.passes > 0) {
@@ -533,6 +542,12 @@ async function generate() {
     $('report').classList.remove('hidden');
   }
   btn.disabled = false; btn.textContent = 'Generate';
+}
+
+function confirmForce(log) {
+  return /does not fit/.test(log) &&
+    window.confirm('The tube does not fit this design. Write the file ' +
+                   'anyway? (the JSON records the failing check)');
 }
 
 async function doExport(force = false) {
