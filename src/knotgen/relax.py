@@ -271,10 +271,21 @@ def relax(
         s = min(g / target_gap, (1.0 / km) / target_bend)
         return s, g, 1.0 / km
 
-    best_score, best_gap, best_bend = score_of(link)
+    if anneal_from is not None and max_depth is not None and anneal_from > max_depth:
+        # anneal mode: the gentle input is OVER budget, and its (easy)
+        # score must not be the bar in-budget states have to beat — the
+        # baseline candidate is the input crushed to the final budget,
+        # i.e. the guarantee becomes "never worse than the plain squash"
+        z0 = link.extents()["z_extent"]
+        baseline = FourierLink(
+            components=link.scaled(1.0, 1.0, min(max_depth / z0, 1.0)).components,
+            name=link.name, meta=link.meta)
+    else:
+        baseline = link
+    best_score, best_gap, best_bend = score_of(baseline)
     best_est = min(best_gap / CLEARANCE_SAFETY, 2.0 * best_bend / BEND_SAFETY)
     best_key = (round(min(best_score, 1.0), 4), round(best_est, 2))
-    best_comps = list(link.components)
+    best_comps = list(baseline.components)
     stagnant = 0
     done_at = iterations
     gain = 1.0
@@ -318,7 +329,11 @@ def relax(
         cur_score = min(cur_gap / target_gap, (1.0 / kmax) / target_bend)
         # damp only on genuine degradation from the best state (a relative
         # deadband — refit jitter must not strangle the step size)
-        if est_tube < 0.97 * best_est:
+        if annealing:
+            # est declines by DESIGN while the budget tightens — reading
+            # that as degradation strangled every force to 10% strength
+            gain = min(gain * 1.1, 1.0)
+        elif est_tube < 0.97 * best_est:
             gain = max(gain * 0.7, 0.1)
         else:
             gain = min(gain * 1.1, 1.0)
