@@ -249,6 +249,13 @@ def relax(
             window = min(np.pi / kmax, L / 4.0)
             w_idx.append(max(int(np.ceil(window / (L / per_comp[ci]))), 1))
 
+        # forces are assembled in separate fields, because they need
+        # DIFFERENT smoothing scales: repulsion acts on whole passages (gap
+        # scale), while bend relief targets kinks whose radius is well below
+        # the gap — smoothing it at gap scale diluted the fix into nothing
+        F_rep = np.zeros_like(P)
+        F_bend = np.zeros_like(P)
+
         # repulsion between close strand points
         tree = cKDTree(P)
         pairs = tree.query_pairs(r=work_gap, output_type="ndarray")
@@ -267,8 +274,8 @@ def relax(
                 dist = np.maximum(dist, 1e-9)
                 push_f = (repulse_scale * REPULSE_GAIN
                           * (work_gap - dist) / dist)[:, None] * d
-                np.add.at(F, i, push_f)
-                np.add.at(F, jj, -push_f)
+                np.add.at(F_rep, i, push_f)
+                np.add.at(F_rep, jj, -push_f)
 
         # fairing weight: a floor of gentle curve-shortening is ALWAYS on
         # (repulsion pumps arc length into the curve, and surplus length in
@@ -284,6 +291,7 @@ def relax(
         off = 0
         for ci, comp in enumerate(comps):
             t = ts[ci]
+            n_i = per_comp[ci]
             d1 = comp.deriv(t, 1)
             d2 = comp.deriv(t, 2)
             sp2 = np.sum(d1 * d1, axis=1, keepdims=True)
@@ -292,18 +300,20 @@ def relax(
             kappa = np.linalg.norm(kv, axis=1)
             excess = np.maximum(kappa - kappa_limit, 0.0)
             hot = excess > 0
+            hot_mask = np.zeros(n_i)
             if hot.any():
                 khat = kv[hot] / kappa[hot, None]
-                F[off:off + per_comp[ci]][hot] -= (
+                F_bend[off:off + n_i][hot] -= (
                     bend_scale * BEND_GAIN * work_bend**2
                     * excess[hot, None] * khat
                 )
+                hot_mask[hot] = 1.0
             # curve-shortening (Laplacian) flow: the most direct un-kinker
             # and the only force that removes surplus length (see lap_w)
-            Pc = P[off:off + per_comp[ci]]
+            Pc = P[off:off + n_i]
             lap = 0.5 * (np.roll(Pc, 1, axis=0) + np.roll(Pc, -1, axis=0)) - Pc
-            F[off:off + per_comp[ci]] += lap_w * lap
-            off += per_comp[ci]
+            F_rep[off:off + n_i] += lap_w * lap
+            off += n_i
 
         # soft depth budget: pull samples outside the z slab back in, as a
         # force (smoothed below like the rest) — the old per-iteration hard
@@ -313,15 +323,18 @@ def relax(
             zc = 0.5 * (P[:, 2].min() + P[:, 2].max())
             dz = P[:, 2] - zc
             over_z = np.abs(dz) - 0.45 * max_depth
-            F[:, 2] -= DEPTH_GAIN * np.sign(dz) * np.maximum(over_z, 0.0)
+            F_rep[:, 2] -= DEPTH_GAIN * np.sign(dz) * np.maximum(over_z, 0.0)
 
-        # smooth the force field per component at the tube scale
+        # smooth each field at its own scale and combine
         off = 0
         for ci in range(len(comps)):
             n_i = per_comp[ci]
             ds = comps[ci].total_length() / n_i
-            sigma_idx = (work_gap / 2.0) / ds
-            F[off:off + n_i] = _smooth_circular(F[off:off + n_i], sigma_idx)
+            F[off:off + n_i] = _smooth_circular(
+                F_rep[off:off + n_i], (work_gap / 2.0) / ds
+            ) + _smooth_circular(
+                F_bend[off:off + n_i], max((0.75 * work_bend) / ds, 1.5)
+            )
             off += n_i
 
         # topology-safe step cap: never move more than 1/4 of the current gap

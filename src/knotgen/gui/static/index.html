@@ -173,7 +173,9 @@
       <summary>Export</summary>
       <div class="row"><label for="outfile">filename</label><input id="outfile" type="text" placeholder="pentafoil.json"/></div>
       <div class="row"><label for="fitpoints">fit points</label><input id="fitpoints" type="number" value="60" step="10"/></div>
-      <div class="hint">bare filenames land in output/ — same as the CLI</div>
+      <div class="row"><label for="meshdetail">mesh detail</label><input id="meshdetail" type="number" value="1" step="0.5" min="0.25" max="4"/></div>
+      <div class="hint">bare filenames land in output/ — same as the CLI;
+        mesh detail 2 = finer STL (~4× triangles)</div>
     </details>
   </div>
   <div id="cmdbar">
@@ -532,7 +534,8 @@ async function doDownloadMesh(force = false) {
     const filename = outName('.stl');
     const r = await fetch('/api/mesh', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ argv: buildArgv(), filename, force }) });
+      body: JSON.stringify({ argv: buildArgv(), filename, force,
+                             detail: Number(num('meshdetail') || 1) }) });
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
       const msg = e.error || r.statusText;

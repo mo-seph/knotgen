@@ -53,14 +53,21 @@ def design_mesh(
     tube_diameter: float,
     sides: int = 24,
     max_rows: int = 3000,
+    detail: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Tube mesh for a whole design (all link components merged)."""
+    """Tube mesh for a whole design (all link components merged).
+
+    detail scales resolution both around and along the tube (2 = twice the
+    segments each way, ~4x the triangles); clamped to [0.25, 4]."""
+    detail = float(np.clip(detail, 0.25, 4.0))
+    sides = int(np.clip(round(sides * detail), 8, 96))
     link = as_link(knot)
     radius = tube_diameter / 2.0
     all_verts, all_faces = [], []
     offset = 0
     for comp in link.components:
-        rows = int(np.clip(comp.total_length() / (0.5 * radius), 64, max_rows))
+        rows = int(np.clip(comp.total_length() / (0.5 * radius / detail),
+                           64, max_rows * detail))
         _, pts = comp.sample_arclength(rows)
         verts, faces = tube_mesh(pts, radius, sides=sides)
         all_verts.append(verts)
@@ -97,13 +104,14 @@ def export_mesh(
     knot,
     tube_diameter: float,
     sides: int = 24,
+    detail: float = 1.0,
 ) -> tuple[Path, int]:
     """Write the design's tube mesh; format from the suffix (.stl binary,
     .obj text; anything else gets .stl appended). Returns (path, n_triangles)."""
     path = Path(path)
     if path.suffix.lower() not in (".stl", ".obj"):
         path = path.with_suffix(path.suffix + ".stl")
-    verts, faces = design_mesh(knot, tube_diameter, sides=sides)
+    verts, faces = design_mesh(knot, tube_diameter, sides=sides, detail=detail)
     name = getattr(knot, "name", "knotgen")
     if path.suffix.lower() == ".obj":
         path.write_text(obj_text(verts, faces, name=name))

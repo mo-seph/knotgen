@@ -86,6 +86,7 @@ Knot names are Rolfsen (`3_1`, `5_2`, `8_19`, ...), or `"T(p,q)"` for a raw toru
 | `--out FILE` | write the JSON export |
 | `--mesh FILE` | write a triangle mesh of the swept tube (`.stl` binary or `.obj`) — straight to a slicer or mesh modeller, no Fusion needed. Needs `--tube`, and refuses if the tube doesn't fit |
 | `--force` | write `--out` / `--mesh` even when the tube check fails (useful when it's close) — the JSON records the failing check, and a forced mesh may self-intersect |
+| `--mesh-detail F` | mesh resolution multiplier (default 1): `2` = twice the segments around and along the tube (~4× the triangles) for slicer-smooth prints, `0.5` = coarser |
 | `--preview` / `--save-png FILE` | 3D view (curvature-coloured, crossing markers in red) |
 
 ### Pre-flight checks

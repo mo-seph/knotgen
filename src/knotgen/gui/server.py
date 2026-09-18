@@ -3,8 +3,9 @@
 Stdlib-only local server (binds 127.0.0.1). The GUI is a command builder:
 the page assembles a `knotgen gen` argv, /api/generate parses it with the
 real CLI parser and runs the same resolve -> style -> relax -> preflight
-pipeline to return geometry for the viewer, and /api/export hands the argv
-verbatim to `knotgen.cli.main` — an export from the GUI *is* a CLI run.
+pipeline to return geometry for the viewer; downloads and exports are
+served from a design cache via the CLI's own document assembly, so a GUI
+file is byte-identical to the CLI export of the same command.
 """
 
 from __future__ import annotations
@@ -388,7 +389,8 @@ def api_mesh(payload: dict) -> tuple[str, bytes]:
     if not report.ok_for_tube and not payload.get("force"):
         raise ValueError("tube does not fit — the mesh would self-intersect "
                          "(see the report; try --relax or a smaller tube)")
-    verts, faces = design_mesh(styled, tube_diameter=args.tube)
+    detail = float(payload.get("detail") or args.mesh_detail)
+    verts, faces = design_mesh(styled, tube_diameter=args.tube, detail=detail)
     filename = _safe_filename(payload.get("filename") or f"{styled.name}.stl", ".stl")
     return filename, stl_bytes(verts, faces, name=styled.name)
 

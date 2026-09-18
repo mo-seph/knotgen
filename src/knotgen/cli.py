@@ -187,6 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--out", default=None, metavar="FILE",
                      help="write the JSON export (for the Fusion KnotImport script); "
                           "a bare filename goes into output/, move keepers to designs/")
+    gen.add_argument("--mesh-detail", type=float, default=1.0, metavar="F",
+                     help="mesh resolution multiplier for --mesh (default 1): "
+                          "2 = twice the segments around and along the tube "
+                          "(~4x the triangles), 0.5 = coarser/lighter")
     gen.add_argument("--force", action="store_true",
                      help="write --out / --mesh even when the tube check fails "
                           "(useful when it's close): the JSON records the "
@@ -228,6 +232,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="also write a tube mesh (.stl/.obj) from the saved "
                           "curve — e.g. reuse a parked --relax result without "
                           "re-running the optimisation; needs --tube")
+    chk.add_argument("--mesh-detail", type=float, default=1.0, metavar="F",
+                     help="mesh resolution multiplier (default 1); see gen --mesh-detail")
     chk.add_argument("--force", action="store_true",
                      help="write the mesh even when the tube check fails")
 
@@ -541,7 +547,8 @@ def cmd_gen(args: argparse.Namespace) -> int:
         from knotgen.mesh import export_mesh
 
         path, n_tris = export_mesh(
-            _resolve_out(args.mesh), styled, tube_diameter=args.tube
+            _resolve_out(args.mesh), styled, tube_diameter=args.tube,
+            detail=args.mesh_detail,
         )
         print(f"  wrote {path}  ({n_tris} triangles)")
 
@@ -643,7 +650,8 @@ def cmd_check(args: argparse.Namespace) -> int:
             from knotgen.mesh import export_mesh
 
             path, n_tris = export_mesh(
-                _resolve_out(args.mesh), knot, tube_diameter=args.tube
+                _resolve_out(args.mesh), knot, tube_diameter=args.tube,
+                detail=args.mesh_detail,
             )
             print(f"  wrote {path}  ({n_tris} triangles)")
             if failed:

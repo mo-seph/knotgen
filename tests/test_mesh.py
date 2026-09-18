@@ -102,3 +102,30 @@ def test_cli_mesh_refused_when_tube_does_not_fit(tmp_path, monkeypatch, capsys):
     assert code == 1
     assert "NOT writing mesh" in capsys.readouterr().out
     assert not (tmp_path / "output" / "t.stl").exists()
+
+
+def test_mesh_detail_scales_triangle_count():
+    styled = apply_style(resolve("3_1"), width=150, depth=25)
+    v1, f1 = design_mesh(styled, tube_diameter=10, detail=1.0)
+    v2, f2 = design_mesh(styled, tube_diameter=10, detail=2.0)
+    vh, fh = design_mesh(styled, tube_diameter=10, detail=0.5)
+    assert 3.0 < len(f2) / len(f1) < 5.0  # ~4x at detail 2
+    assert len(fh) < len(f1)
+    # still watertight at high detail
+    edges = np.sort(
+        np.concatenate([f2[:, [0, 1]], f2[:, [1, 2]], f2[:, [2, 0]]]), axis=1
+    )
+    _, counts = np.unique(edges, axis=0, return_counts=True)
+    assert (counts == 2).all()
+
+
+def test_cli_mesh_detail(tmp_path, monkeypatch):
+    from knotgen.cli import main
+
+    monkeypatch.chdir(tmp_path)
+    main(["3_1", "--width", "150", "--tube", "10", "--mesh", "a.stl"])
+    main(["3_1", "--width", "150", "--tube", "10", "--mesh", "b.stl",
+          "--mesh-detail", "2"])
+    a = (tmp_path / "output" / "a.stl").stat().st_size
+    b = (tmp_path / "output" / "b.stl").stat().st_size
+    assert b > 2.5 * a
