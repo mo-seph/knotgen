@@ -491,7 +491,36 @@ async function generate() {
   btn.disabled = true; btn.textContent = 'Generating…';
   refreshCmd();
   try {
-    const data = await post('/api/generate', { argv: buildArgv() });
+    const argv = buildArgv();
+    let data;
+    if (argv.includes('--relax')) {
+      // relax is slow: run it as a background job and redraw the tube
+      // from every snapshot so the optimiser can be watched working
+      const { job } = await post('/api/generate_async', { argv });
+      let lastIt = -1;
+      const name = $('knotname').value.trim();
+      for (;;) {
+        await new Promise(r => setTimeout(r, 400));
+        const p = await fetch('/api/progress/' + job).then(r => r.json());
+        if (p.error) throw new Error(p.error);
+        const snap = p.snapshot;
+        if (snap && snap.iteration !== lastIt) {
+          lastIt = snap.iteration;
+          buildScene({ name, components: snap.components,
+                       tube_mm: Number(num('tube') || 0) || null,
+                       strips: null, tight_spots: [] });
+          reportMsg(`<pre>relax iteration ${snap.iteration} [${esc(snap.phase || '')}]: ` +
+            `fits ⌀${snap.fits} · bend r ${snap.bend} · gap ${snap.gap} mm` +
+            (snap.length ? ` · rope ${snap.length} mm` : '') +
+            (snap.d_work ? ` · working ⌀${snap.d_work}` : '') + `</pre>`);
+          btn.textContent = `Relaxing… ${snap.iteration}`;
+        }
+        if (p.status === 'error') throw new Error(p.error || 'relax failed');
+        if (p.status === 'done') { data = p.result; break; }
+      }
+    } else {
+      data = await post('/api/generate', { argv });
+    }
     buildScene(data);
     showStats(data);
     showReport(data);
@@ -504,12 +533,6 @@ async function generate() {
     $('report').classList.remove('hidden');
   }
   btn.disabled = false; btn.textContent = 'Generate';
-}
-
-function confirmForce(log) {
-  return /does not fit/.test(log) &&
-    window.confirm('The tube does not fit this design. Write the file ' +
-                   'anyway? (the JSON records the failing check)');
 }
 
 async function doExport(force = false) {

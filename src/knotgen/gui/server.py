@@ -77,9 +77,10 @@ def api_catalogue() -> dict:
     }
 
 
-def _styled_from_args(args):
+def _styled_from_args(args, snapshot=None, snapshot_every=5):
     """The gen pipeline up to a styled (and relaxed) curve — shared by
-    /api/generate and /api/mesh."""
+    /api/generate and /api/mesh. snapshot(it, link, metrics) receives
+    relax progress when given."""
     from knotgen.registry import resolve
     from knotgen.transforms import apply_style
 
@@ -115,12 +116,19 @@ def _styled_from_args(args):
             max_depth = None
         elif max_depth is None and args.depth is not None:
             max_depth = args.depth
+        from knotgen.link import as_link as _al
+
+        natural = apply_style(knot, width=args.width, breadth=args.breadth,
+                              tightness=args.tightness)
+        rope_budget = sum(c.total_length() for c in _al(natural).components)
         styled, relax_info = relax(
             styled, tube=args.tube, iterations=args.relax_iterations,
             max_depth=max_depth, push=args.relax_max, verbose=False,
             method=args.relax_method,
             polish_floor=1.0 - min(max(args.polish_budget, 0.0), 30.0) / 100.0,
-            anneal_from=anneal_from,
+            anneal_from=anneal_from, rope_budget=rope_budget,
+            rope_slack=args.rope_slack, snapshot=snapshot,
+            snapshot_every=snapshot_every,
         )
         relax_info = {k: (float(v) if hasattr(v, "item") or isinstance(v, float) else v)
                       for k, v in relax_info.items()}
@@ -156,15 +164,16 @@ def _styled_from_args(args):
 _DESIGN_CACHE: dict[tuple, tuple] = {}
 
 
-def _design_for(argv: list) -> tuple:
-    """(args, knot, styled, relax_info) for an argv — cached, so a Download
-    after a Generate serves EXACTLY the design on screen instead of
-    re-running the pipeline (and any --relax) a second time."""
+def _design_for(argv: list, snapshot=None, snapshot_every: int = 5) -> tuple:
+    """(args, knot, styled, relax_info, polish_info) for an argv — cached,
+    so a Download after a Generate serves EXACTLY the design on screen
+    instead of re-running the pipeline (and any --relax) a second time."""
     key = tuple(str(a) for a in argv)
     if key in _DESIGN_CACHE:
         return _DESIGN_CACHE[key]
     args = _parse_gen_argv(list(key))
-    result = (args, *_styled_from_args(args))
+    result = (args, *_styled_from_args(args, snapshot=snapshot,
+                                       snapshot_every=snapshot_every))
     if len(_DESIGN_CACHE) >= 8:
         _DESIGN_CACHE.pop(next(iter(_DESIGN_CACHE)))
     _DESIGN_CACHE[key] = result
@@ -242,11 +251,16 @@ def api_doc(doc_id: str) -> dict:
     return {"id": doc_id, "markdown": path.read_text()}
 
 
-def api_generate(payload: dict) -> dict:
+def api_generate(payload: dict, snapshot=None) -> dict:
+    args, knot, styled, relax_info, polish_info = _design_for(
+        payload.get("argv") or [], snapshot=snapshot)
+    return _generate_response(payload, args, knot, styled, relax_info, polish_info)
+
+
+def _generate_response(payload, args, knot, styled, relax_info, polish_info) -> dict:
     from knotgen.checks import preflight
     from knotgen.link import as_link
 
-    args, knot, styled, relax_info, polish_info = _design_for(payload.get("argv") or [])
     link = as_link(styled)
     report = preflight(styled, tube_diameter=args.tube)
     e = styled.extents()
@@ -432,6 +446,60 @@ def api_mesh(payload: dict) -> tuple[str, bytes]:
     return filename, stl_bytes(verts, faces, name=styled.name)
 
 
+_JOBS: dict[str, dict] = {}
+_JOBS_LOCK = threading.Lock()
+
+
+def _snapshot_points(link, n: int = 240) -> list:
+    from knotgen.link import as_link
+
+    out = []
+    for comp in as_link(link).components:
+        _, pts = comp.sample_arclength(n)
+        out.append([[round(float(c), 2) for c in p] for p in pts])
+    return out
+
+
+def api_generate_start(payload: dict) -> dict:
+    """Run api_generate in a background thread; poll api_progress for the
+    relax snapshots and the final result."""
+    import uuid
+
+    job_id = uuid.uuid4().hex[:12]
+    with _JOBS_LOCK:
+        _JOBS[job_id] = {"status": "running", "snapshot": None, "result": None,
+                         "error": None}
+        if len(_JOBS) > 16:
+            for k in list(_JOBS)[:-16]:
+                _JOBS.pop(k, None)
+
+    def snapshot(it, link, metrics):
+        snap = {**metrics, "components": _snapshot_points(link)}
+        with _JOBS_LOCK:
+            _JOBS[job_id]["snapshot"] = snap
+
+    def run():
+        try:
+            result = api_generate(payload, snapshot=snapshot)
+            with _JOBS_LOCK:
+                _JOBS[job_id].update(status="done", result=result)
+        except Exception as exc:  # surfaced to the page
+            with _JOBS_LOCK:
+                _JOBS[job_id].update(status="error",
+                                     error=f"{type(exc).__name__}: {exc}")
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job": job_id}
+
+
+def api_progress(job_id: str) -> dict:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is None:
+            raise ValueError(f"no such job {job_id!r}")
+        return dict(job)
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):  # keep the terminal quiet
         pass
@@ -456,6 +524,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(api_catalogue())
         elif self.path == "/api/groups":
             self._json(api_groups())
+        elif self.path.startswith("/api/progress/"):
+            try:
+                self._json(api_progress(self.path.rsplit("/", 1)[1]))
+            except ValueError as exc:
+                self._json({"error": str(exc)}, status=404)
         elif self.path.startswith("/api/doc/"):
             try:
                 self._json(api_doc(self.path.rsplit("/", 1)[1]))
@@ -474,6 +547,8 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if self.path == "/api/generate":
                 self._json(api_generate(payload))
+            elif self.path == "/api/generate_async":
+                self._json(api_generate_start(payload))
             elif self.path == "/api/thumbs":
                 self._json(api_thumbs(payload))
             elif self.path == "/api/export":

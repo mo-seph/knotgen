@@ -1,0 +1,331 @@
+"""Fixed-rope relaxation: inflate the TUBE, never the rope.
+
+The earlier relaxers bought clearance by manufacturing arc length —
+pushing strands apart at an ambitious working target lengthens the curve,
+and surplus rope confined to a slab has exactly one place to go: wiggles
+and coils. The max-tube metric rewarded it, so numbers improved while
+shapes got worse.
+
+This one takes the ideal-knot algorithms' discipline (SONO, ridgerunner):
+the rope is inextensible. Each iteration
+
+  1. finds every pair whose Gonzalez-Maddocks tangent-point radius is
+     below the current working radius and pushes them apart (moving rope),
+  2. applies the depth budget and a little fairing,
+  3. PROJECTS the curve back onto its length budget with curve-shortening
+     steps — which shrink high-curvature features first, i.e. wiggles are
+     the slack that gets spent — then refits, re-symmetrises and restores
+     the footprint,
+
+and inflates the working tube diameter by 3% every time the design is
+clean at the current one. When it stalls, it grants a little more rope
+(up to the budget: the knot's natural length plus a small slack, for
+rounding crushed kinks) and tries again; when rope and patience are both
+spent, it stops. The result is the fattest tube this knot's rope can carry
+in this slab — with no coils, by construction, because there is no rope
+to make them from.
+
+The requested tube only enters scoring and reporting (the best state
+returned is the one that best satisfies the request, ties broken by the
+absolute achievable tube), so the dynamics are request-independent.
+"""
+
+from __future__ import annotations
+
+from typing import Callable
+
+import numpy as np
+from scipy.spatial import cKDTree
+
+from knotgen.fourier import FourierKnot
+from knotgen.link import FourierLink, as_link
+from knotgen.relax import (
+    BEND_SAFETY,
+    CLEARANCE_SAFETY,
+    DEPTH_GAIN,
+    _sample_all,
+    _smooth_circular,
+    _symmetry_projection,
+    spectral_polish,
+)
+
+GM_GAIN = 1.0  # push per mm of tangent-point-radius deficit (SONO resolves overlaps fully)
+FAIR_GAIN = 0.12  # gentle always-on curve-shortening (wobble hygiene)
+INFLATE = 1.03  # working tube growth per clean iteration
+ROPE_GRANT = 1.02  # rope allowance growth when stuck (up to the budget)
+SHRINK_STEP = 0.3  # Laplacian step used by the length projection
+PRESSURE = 1.25  # overlaps are resolved against a radius this much above the
+#                  working one: the rope cap makes high pressure safe (it can
+#                  only move rope, never make it), and low pressure stalls
+
+
+def _polyline_length(pts: np.ndarray) -> float:
+    d = np.roll(pts, -1, axis=0) - pts
+    return float(np.linalg.norm(d, axis=1).sum())
+
+
+def _laplacian(pts: np.ndarray) -> np.ndarray:
+    return 0.5 * (np.roll(pts, 1, axis=0) + np.roll(pts, -1, axis=0)) - pts
+
+
+def _shorten_to(blocks: list[np.ndarray], allowed: float, max_steps: int = 120) -> tuple[list[np.ndarray], int]:
+    """Curve-shortening steps on the sampled components until their total
+    polyline length is within `allowed`. High-curvature features shrink
+    fastest, so this spends wiggles before it spends lobes."""
+    steps = 0
+    total = sum(_polyline_length(b) for b in blocks)
+    while total > allowed and steps < max_steps:
+        blocks = [b + SHRINK_STEP * _laplacian(b) for b in blocks]
+        total = sum(_polyline_length(b) for b in blocks)
+        steps += 1
+    return blocks, steps
+
+
+def relax_fixed_rope(
+    design: FourierKnot | FourierLink,
+    tube: float,
+    iterations: int = 150,
+    max_depth: float | None = None,
+    push: bool = False,
+    verbose: bool = False,
+    rope_budget: float | None = None,
+    rope_slack: float = 0.10,
+    polish_floor: float = 0.995,
+    snapshot: Callable[[int, FourierLink, dict], None] | None = None,
+    snapshot_every: int = 5,
+) -> tuple[FourierKnot | FourierLink, dict]:
+    """Return (relaxed design, info). See the module docstring.
+
+    rope_budget: the most rope the design may use (mm); default = its
+    current length. rope_slack: extra fraction on top of the budget, for
+    rounding crushed kinks (default 0.10). snapshot(it, link, metrics) is
+    called every `snapshot_every` iterations and once at the end.
+    """
+    from knotgen.geometry import max_curvature, min_clearance
+    from knotgen.gm import tangent_point_radii
+
+    single = isinstance(design, FourierKnot)
+    link = as_link(design)
+    target_gap = tube * CLEARANCE_SAFETY
+    target_bend = 0.5 * tube * BEND_SAFETY
+    width0 = link.extents()["xy_diameter"]
+    sym = link.components[0].rotational_symmetry_order() if single else 1
+
+    per_comp, harmonics = [], []
+    for comp in link.components:
+        h = min(max(comp.n_harmonics, 24), 128)
+        per_comp.append(int(min(max(256, 2 * h + 64), 768)))
+        harmonics.append(h)
+
+    comps = list(link.components)
+    if push:
+        iterations = max(iterations, 600)
+    patience = 40 if push else 20
+
+    def total_length(cs) -> float:
+        return sum(c.total_length() for c in cs)
+
+    length0 = total_length(comps)
+    # the rope budget is the input length plus slack (rounding crushed kinks
+    # needs a little); rope_budget, when given, only ever CAPS it — a
+    # crushed ideal knot's natural length is far more rope than its flat
+    # self should be allowed, and surplus rope is exactly what wiggles are
+    rope_max = length0 * (1.0 + rope_slack)
+    if rope_budget is not None:
+        rope_max = min(rope_max, max(rope_budget, length0))
+    rope_allow = length0  # grows toward rope_max only when stuck
+
+    def measure(cs):
+        cand = FourierLink(components=list(cs), name=link.name, meta=link.meta)
+        g, _, _ = min_clearance(cand)
+        km, _ = max_curvature(cand)
+        est = min(g / CLEARANCE_SAFETY, 2.0 * (1.0 / km) / BEND_SAFETY)
+        score = min(g / target_gap, (1.0 / km) / target_bend)
+        return score, g, 1.0 / km, est
+
+    score, gap, bend, est = measure(comps)
+    gap0, bend0 = gap, bend
+    best = {"key": (round(min(score, 1.0), 4), round(est, 2)),
+            "comps": list(comps), "score": score, "gap": gap,
+            "bend": bend, "est": est}
+    d_work = est  # working tube diameter: clean here -> inflate
+    stuck = 0
+    grants = 0
+    done_at = iterations
+
+    def emit(it: int, cs, extra: dict) -> None:
+        if snapshot is None:
+            return
+        snapshot(it, FourierLink(components=list(cs), name=link.name, meta=link.meta),
+                 {"iteration": it, "gap": round(gap, 2), "bend": round(bend, 2),
+                  "fits": round(est, 2), "d_work": round(d_work, 2),
+                  "length": round(total_length(cs), 1),
+                  "rope_allow": round(rope_allow, 1), **extra})
+
+    emit(0, comps, {"phase": "start"})
+
+    for it in range(iterations):
+        r_work = 0.5 * d_work * BEND_SAFETY * PRESSURE  # GM radius to push for
+        work = FourierLink(components=comps, name=link.name, meta=link.meta)
+        ts, pts_list, comp_id, idx = _sample_all(work, per_comp)
+        P = np.vstack(pts_list)
+        T = np.vstack([
+            (lambda d1: d1 / np.linalg.norm(d1, axis=1, keepdims=True))(
+                comp.deriv(ts[ci], 1))
+            for ci, comp in enumerate(comps)
+        ])
+
+        # 1. overlap removal: tangent-point radius below the working radius
+        F_gm = np.zeros_like(P)
+        tree = cKDTree(P)
+        pairs = tree.query_pairs(r=2.0 * r_work, output_type="ndarray")
+        n_viol = 0
+        if len(pairs):
+            i, jj = pairs[:, 0], pairs[:, 1]
+            same = comp_id[i] == comp_id[jj]
+            gap_idx = np.abs(idx[i] - idx[jj])
+            n_arr = np.array([per_comp[c] for c in comp_id[i]])
+            gap_idx = np.minimum(gap_idx, n_arr - gap_idx)
+            keep = ~(same & (gap_idx <= 2))
+            i, jj = i[keep], jj[keep]
+            for x, y in ((i, jj), (jj, i)):
+                r_tp, u = tangent_point_radii(P, T, x, y)
+                viol = r_tp < r_work
+                n_viol += int(viol.sum())
+                if viol.any():
+                    f = (GM_GAIN * (r_work - r_tp[viol]))[:, None] * u[viol]
+                    np.add.at(F_gm, y[viol], f)
+                    np.add.at(F_gm, x[viol], -f)
+
+        # 2. depth budget (soft) and gentle fairing (unsmoothed, so it can
+        #    act at wiggle wavelengths)
+        F_other = np.zeros_like(P)
+        if max_depth is not None:
+            zc = 0.5 * (P[:, 2].min() + P[:, 2].max())
+            dz = P[:, 2] - zc
+            over_z = np.abs(dz) - 0.49 * max_depth  # use the whole slab
+            F_other[:, 2] -= DEPTH_GAIN * np.sign(dz) * np.maximum(over_z, 0.0)
+        off = 0
+        F = np.zeros_like(P)
+        for ci in range(len(comps)):
+            n_i = per_comp[ci]
+            ds = comps[ci].total_length() / n_i
+            block = slice(off, off + n_i)
+            F[block] = (_smooth_circular(F_gm[block], max((0.75 * r_work) / ds, 1.5))
+                        + F_other[block]
+                        + FAIR_GAIN * _laplacian(P[block]))
+            off += n_i
+
+        # topology-safe step cap
+        max_move = np.linalg.norm(F, axis=1).max()
+        cap = max(0.25 * gap, 0.05)
+        if max_move > cap:
+            F *= cap / max_move
+        moved = P + F
+
+        # 3. length projection: the rope is inextensible
+        blocks = []
+        off = 0
+        for ci in range(len(comps)):
+            blocks.append(moved[off:off + per_comp[ci]])
+            off += per_comp[ci]
+        poly_now = sum(_polyline_length(b) for b in pts_list)
+        allowed = poly_now * (rope_allow / max(total_length(comps), 1e-9))
+        pre_shrink = [b.copy() for b in blocks]
+        blocks, shrink_steps = _shorten_to(blocks, allowed)
+        # the shrink is a topology-unaware flow: cap its displacement like
+        # the forces (a quarter of the current strand gap) so it can never
+        # drag a strand through another; any leftover length is spent on
+        # later iterations
+        if shrink_steps:
+            disp = max(np.linalg.norm(b - b0, axis=1).max()
+                       for b, b0 in zip(blocks, pre_shrink))
+            if disp > cap:
+                blocks = [b0 + (b - b0) * (cap / disp)
+                          for b, b0 in zip(blocks, pre_shrink)]
+
+        new_comps = []
+        for ci, comp in enumerate(comps):
+            k = FourierKnot.from_samples(
+                blocks[ci], n_harmonics=min(harmonics[ci], per_comp[ci] // 2 - 1),
+                name=comp.name, meta=comp.meta,
+            )
+            if sym > 1:
+                k = _symmetry_projection(k, sym)
+            new_comps.append(k)
+        work = FourierLink(components=new_comps, name=link.name, meta=link.meta)
+        s = width0 / work.extents()["xy_diameter"]
+        comps = work.scaled(s, s, s).components
+        if max_depth is not None:
+            check = FourierLink(components=comps, name=link.name, meta=link.meta)
+            z = check.extents()["z_extent"]
+            if z > max_depth:
+                comps = check.scaled(1.0, 1.0, max_depth / z).components
+
+        # 4. measure, inflate or grant rope, track the best
+        score, gap, bend, est = measure(comps)
+        key = (round(min(score, 1.0), 4), round(est, 2))
+        if key > best["key"]:
+            best = {"key": key, "comps": list(comps), "score": score,
+                    "gap": gap, "bend": bend, "est": est}
+        if est >= 0.97 * d_work:
+            d_work = max(d_work, est) * INFLATE
+            stuck = 0
+        else:
+            stuck += 1
+        phase = "inflate"
+        if stuck >= patience:
+            if rope_allow < rope_max * 0.999:
+                rope_allow = min(rope_allow * ROPE_GRANT, rope_max)
+                grants += 1
+                stuck = 0
+                phase = "grant-rope"
+            else:
+                done_at = it + 1
+                emit(it + 1, comps, {"phase": "stop"})
+                break
+
+        if verbose and (it % 5 == 4 or it == iterations - 1):
+            print(f"    relax {it:3d}: gap {gap:6.1f} mm, bend r {bend:6.1f} mm "
+                  f"(fits ⌀{est:.1f}, working ⌀{d_work:.1f}, "
+                  f"rope {total_length(comps):.0f}/{rope_allow:.0f} mm, "
+                  f"{n_viol} overlaps, {shrink_steps} shrink steps)")
+        if (it + 1) % snapshot_every == 0:
+            emit(it + 1, comps, {"phase": phase})
+
+    result_comps = list(best["comps"])
+    polished, polish_info = spectral_polish(
+        FourierLink(components=result_comps, name=link.name, meta=link.meta),
+        max_depth=max_depth, floor=polish_floor,
+    )
+    if polish_info["passes"] > 0:
+        result_comps = list(polished.components)
+        _, gap1, bend1, _ = measure(result_comps)
+    else:
+        gap1, bend1 = best["gap"], best["bend"]
+    if verbose and polish_info["passes"] > 0:
+        print(f"    polish: {polish_info['passes']} passes, wobble "
+              f"-{100 * polish_info['wobble_reduction']:.0f}%, "
+              f"fits ⌀{polish_info['est_before']} -> "
+              f"⌀{polish_info['est_after']}")
+
+    result = FourierLink(components=result_comps, name=link.name, meta=dict(link.meta))
+    result.meta["relaxed"] = {
+        "tube": tube, "iterations": done_at, "method": "sono",
+        "gap_before": round(float(gap0), 2), "gap_after": round(float(gap1), 2),
+        "bend_before": round(float(bend0), 2), "bend_after": round(float(bend1), 2),
+        "length_before": round(length0, 1),
+        "length_after": round(total_length(result_comps), 1),
+        "rope_budget": round(rope_max, 1), "rope_grants": grants,
+        "converged": bool(gap1 >= 0.99 * target_gap and bend1 >= 0.99 * target_bend),
+        "max_tube_est": round(min(2.0 * bend1 / 1.1, gap1 / 1.05), 1),
+        "polish": polish_info,
+    }
+    info = result.meta["relaxed"]
+    emit(done_at, result_comps, {"phase": "final"})
+    if single:
+        out = result.components[0]
+        out.name = design.name
+        out.meta = result.meta
+        return out, info
+    return result, info

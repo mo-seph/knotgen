@@ -153,12 +153,26 @@ def build_parser() -> argparse.ArgumentParser:
                           "re-polish: 'fit gently, squash a little' — keeps "
                           "the smooth aesthetics at a modest tube cost "
                           "(sub-linear for small squashes)")
-    gen.add_argument("--relax-method", choices=["gm", "forces"], default="gm",
-                     help="relaxation force law: 'gm' (default) = one unified "
-                          "force from the Gonzalez-Maddocks tangent-point "
-                          "radius (bend relief and strand repulsion as limits "
-                          "of the same quantity); 'forces' = the earlier "
-                          "separate repulsion + bend-relief pair")
+    gen.add_argument("--relax-method", choices=["sono", "gm", "forces"],
+                     default="sono",
+                     help="relaxation strategy: 'sono' (default) = fixed-rope: "
+                          "inflate the tube, never the rope — resolves "
+                          "Gonzalez-Maddocks overlaps by MOVING rope under a "
+                          "length budget, so no coils/wiggle by construction; "
+                          "'gm' = earlier ambition-driven dynamics with the "
+                          "GM force; 'forces' = original repulsion + bend pair")
+    gen.add_argument("--rope-slack", type=float, default=0.10, metavar="F",
+                     help="sono: extra rope the relax may use beyond the knot's "
+                          "natural length, as a fraction (default 0.10) — a "
+                          "little is needed to round crushed kinks; a lot "
+                          "becomes wiggle")
+    gen.add_argument("--relax-snapshots", default=None, metavar="DIR",
+                     help="write a PNG of the design every --snapshot-every "
+                          "relax iterations into DIR (plus trace.json with "
+                          "gap/bend/fits/rope length per snapshot) — watch "
+                          "the optimiser work")
+    gen.add_argument("--snapshot-every", type=int, default=5, metavar="N",
+                     help="snapshot interval in iterations (default 5)")
     gen.add_argument("--relax-max", action="store_true",
                      help="push the relaxation much harder: bigger iteration "
                           "budget and more patience before declaring a plateau")
@@ -325,6 +339,38 @@ def _resolve_out(path_str: str) -> "Path":
     return p
 
 
+class _snapshot_writer:
+    """relax snapshot callback: a PNG per snapshot plus a trace.json."""
+
+    def __init__(self, directory: str, name: str, tube: float | None):
+        import json as _json
+        from pathlib import Path
+
+        self.dir = Path(directory)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.name = re.sub(r"[^\w.\-]+", "_", name).strip("_")
+        self.tube = tube
+        self.trace: list[dict] = []
+        self.count = 0
+        self._json = _json
+
+    def __call__(self, it: int, link, metrics: dict) -> None:
+        from knotgen.viz import preview
+
+        phase = metrics.get("phase", "")
+        tag = f"_{phase}" if phase in ("start", "stop", "final") else ""
+        path = self.dir / f"{self.name}_it{it:03d}{tag}.png"
+        title = (f"{self.name} it {it}: fits \u2300{metrics.get('fits', '?')} "
+                 f"rope {metrics.get('length', '?')} mm [{metrics.get('phase', '')}]")
+        preview(link, tube_diameter=self.tube, save=str(path), show=False,
+                title=title)
+        self.trace.append({**metrics, "png": path.name})
+        self.count += 1
+
+    def finish(self) -> None:
+        (self.dir / "trace.json").write_text(self._json.dumps(self.trace, indent=1))
+
+
 def assemble_document(styled, report, args, strip_frames=None) -> dict:
     """The ONE place the export JSON is put together (paths, strips,
     connectors, mounts) — shared by cmd_gen and the GUI server, so a GUI
@@ -389,6 +435,7 @@ def compute_strip_frames(styled_link, args):
 
 def cmd_gen(args: argparse.Namespace) -> int:
     from knotgen.checks import preflight
+    from knotgen.link import as_link
     from knotgen.registry import resolve
     from knotgen.transforms import apply_style
 
@@ -460,7 +507,18 @@ def cmd_gen(args: argparse.Namespace) -> int:
             print(f"  relax: holding depth <= {args.depth:g} mm (your --depth; "
                   f"--relax-max-depth 0 to lift, or set a bigger budget)")
         print(f"  relaxing for a {args.tube:g} mm tube "
-              f"(max {args.relax_iterations} iterations)...")
+              f"(max {args.relax_iterations} iterations, {args.relax_method})...")
+        # rope budget: the knot's natural (uniformly scaled) length — a
+        # crushed design may need a little more rope than it has to round
+        # its kinks, but never more than its natural self plus slack
+        natural = apply_style(knot, width=args.width, breadth=args.breadth,
+                              tightness=args.tightness)
+        rope_budget = sum(c.total_length() for c in as_link(natural).components)
+
+        snapshot_cb = None
+        if args.relax_snapshots:
+            snapshot_cb = _snapshot_writer(args.relax_snapshots, styled.name,
+                                           args.tube)
         styled, info = relax(
             styled,
             tube=args.tube,
@@ -471,7 +529,18 @@ def cmd_gen(args: argparse.Namespace) -> int:
             method=args.relax_method,
             polish_floor=1.0 - min(max(args.polish_budget, 0.0), 30.0) / 100.0,
             anneal_from=anneal_from,
+            rope_budget=rope_budget,
+            rope_slack=args.rope_slack,
+            snapshot=snapshot_cb,
+            snapshot_every=args.snapshot_every,
         )
+        if snapshot_cb is not None:
+            snapshot_cb.finish()
+            print(f"  snapshots: {snapshot_cb.count} PNGs + trace.json in "
+                  f"{args.relax_snapshots}")
+        if "length_after" in info:
+            print(f"  rope: {info['length_before']:.0f} -> {info['length_after']:.0f} mm "
+                  f"(budget {info['rope_budget']:.0f}, {info['rope_grants']} grants)")
         print(f"  relaxed in {info['iterations']} iterations: "
               f"strand gap {info['gap_before']:g} -> {info['gap_after']:g} mm, "
               f"bend radius {info['bend_before']:g} -> {info['bend_after']:g} mm")

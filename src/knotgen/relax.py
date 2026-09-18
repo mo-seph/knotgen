@@ -210,6 +210,10 @@ def relax(
     method: str = "forces",
     polish_floor: float = 0.995,
     anneal_from: float | None = None,
+    rope_budget: float | None = None,
+    rope_slack: float = 0.10,
+    snapshot=None,
+    snapshot_every: int = 5,
 ) -> tuple[FourierKnot | FourierLink, dict]:
     """Return (relaxed design, info). Sizes in mm; run AFTER apply_style.
 
@@ -226,14 +230,23 @@ def relax(
     high-frequency bumps. push: grind much harder (more iterations, more
     patience).
 
-    method: 'forces' (default) = the tuned repulsion + bend-relief pair;
-    'gm' = one unified force from the Gonzalez-Maddocks tangent-point
-    radius (see gm.py) — every pair whose tangent circle is tighter than
-    the working radius gets pushed perpendicular to the tangent, which IS
-    bend relief in the near limit and passage repulsion in the far limit,
-    with no exclusion windows. Both methods share the scoring, fairing,
-    depth budget, step caps and best-state guarantee.
+    method: 'sono' (default) = fixed-rope relaxation (see ropelength.py):
+    inflate the tube, never the rope — no coils by construction;
+    'gm' = the earlier ambition-driven dynamics with the Gonzalez-Maddocks
+    tangent-point force; 'forces' = the original repulsion + bend-relief
+    pair. All share scoring, depth budget, symmetry and the best-state
+    guarantee. snapshot(it, link, metrics) is called every
+    `snapshot_every` iterations when given.
     """
+    if method == "sono":
+        from knotgen.ropelength import relax_fixed_rope
+
+        return relax_fixed_rope(
+            design, tube, iterations=iterations, max_depth=max_depth,
+            push=push, verbose=verbose, rope_budget=rope_budget,
+            rope_slack=rope_slack, polish_floor=polish_floor,
+            snapshot=snapshot, snapshot_every=snapshot_every,
+        )
     from knotgen.geometry import max_curvature, min_clearance
 
     single = isinstance(design, FourierKnot)
@@ -479,7 +492,7 @@ def relax(
         if z_budget is not None:
             zc = 0.5 * (P[:, 2].min() + P[:, 2].max())
             dz = P[:, 2] - zc
-            over_z = np.abs(dz) - 0.45 * z_budget
+            over_z = np.abs(dz) - 0.49 * z_budget  # use the whole slab
             F_rep[:, 2] -= DEPTH_GAIN * np.sign(dz) * np.maximum(over_z, 0.0)
 
         # smooth each field at its own scale and combine
@@ -532,13 +545,20 @@ def relax(
                 comps = check.scaled(1.0, 1.0, z_budget / z).components
         prev_budget = z_budget
 
-        if verbose and (it % 5 == 4 or it == iterations - 1):
+        if (verbose or snapshot is not None) and (it % snapshot_every == snapshot_every - 1
+                                                  or it == iterations - 1):
             check = FourierLink(components=comps, name=link.name, meta=link.meta)
             s, g, br = score_of(check)
             limiter = "bend" if br / target_bend < g / target_gap else "gap"
             est = min(g / CLEARANCE_SAFETY, 2.0 * br / BEND_SAFETY)
-            print(f"    relax {it:3d}: gap {g:6.1f} mm, bend r {br:6.1f} mm "
-                  f"(fits \u2300{est:.1f}, {limiter}-limited, gain {gain:.2f})")
+            if verbose:
+                print(f"    relax {it:3d}: gap {g:6.1f} mm, bend r {br:6.1f} mm "
+                      f"(fits \u2300{est:.1f}, {limiter}-limited, gain {gain:.2f})")
+            if snapshot is not None:
+                snapshot(it + 1, check, {"iteration": it + 1, "gap": round(g, 2),
+                                         "bend": round(br, 2), "fits": round(est, 2),
+                                         "length": round(sum(c.total_length() for c in comps), 1),
+                                         "phase": "relax"})
 
     # whatever path exited the loop, give the final state a chance to win
     final = FourierLink(components=comps, name=link.name, meta=link.meta)
