@@ -480,6 +480,10 @@ def cmd_gen(args: argparse.Namespace) -> int:
     if args.relax_anneal:
         if not (args.relax and args.depth):
             print("  ! --relax-anneal needs --relax and --depth; ignored")
+        elif args.relax_method == "sono":
+            print("  ! --relax-anneal is ignored with the fixed-rope method: a "
+                  "stretched start would inflate the rope budget (the coil "
+                  "recipe). Use --relax-method gm to anneal")
         else:
             style_depth = args.depth * args.relax_anneal
             anneal_from = style_depth

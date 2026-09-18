@@ -95,7 +95,7 @@ def _styled_from_args(args, snapshot=None, snapshot_every=5):
         raise ValueError(str(exc.args[0]) if exc.args else str(exc)) from None
     anneal_from = None
     style_depth = args.depth
-    if args.relax_anneal and args.relax and args.depth:
+    if args.relax_anneal and args.relax and args.depth and args.relax_method != "sono":
         style_depth = args.depth * args.relax_anneal
         anneal_from = style_depth
     styled = apply_style(
