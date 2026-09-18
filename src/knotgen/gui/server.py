@@ -119,11 +119,20 @@ def _styled_from_args(args):
         relax_info = {k: (float(v) if hasattr(v, "item") or isinstance(v, float) else v)
                       for k, v in relax_info.items()}
 
+    polish_info = None
+    if args.polish and not args.relax:
+        from knotgen.relax import spectral_polish
+
+        styled, polish_info = spectral_polish(
+            styled, max_depth=args.depth if args.depth else None,
+            floor=1.0 - min(max(args.polish_budget, 0.0), 30.0) / 100.0,
+        )
+
     if args.wall:
         from knotgen.transforms import floor_z
 
         styled = floor_z(styled)
-    return knot, styled, relax_info
+    return knot, styled, relax_info, polish_info
 
 
 _DESIGN_CACHE: dict[tuple, tuple] = {}
@@ -219,7 +228,7 @@ def api_generate(payload: dict) -> dict:
     from knotgen.checks import preflight
     from knotgen.link import as_link
 
-    args, knot, styled, relax_info = _design_for(payload.get("argv") or [])
+    args, knot, styled, relax_info, polish_info = _design_for(payload.get("argv") or [])
     link = as_link(styled)
     report = preflight(styled, tube_diameter=args.tube)
     e = styled.extents()
@@ -298,6 +307,7 @@ def api_generate(payload: dict) -> dict:
             "ok_for_tube": (None if args.tube is None else bool(report.ok_for_tube)),
         },
         "relax": relax_info,
+        "polish": polish_info,
         "warnings": warnings,
     }
 
@@ -317,7 +327,7 @@ def _document_for(argv: list, out_name: str, force: bool) -> dict:
     from knotgen.cli import assemble_document, compute_strip_frames
     from knotgen.link import as_link
 
-    args, _, styled, _ = _design_for(argv)
+    args, _, styled, _, _ = _design_for(argv)
     if args.connectors and args.connector_spacing:
         raise ValueError("give either connectors count OR max spacing, not both")
     report = preflight(styled, tube_diameter=args.tube)
@@ -384,7 +394,7 @@ def api_mesh(payload: dict) -> tuple[str, bytes]:
     from knotgen.checks import preflight
     from knotgen.mesh import design_mesh, stl_bytes
 
-    args, _, styled, _ = _design_for(payload.get("argv") or [])
+    args, _, styled, _, _ = _design_for(payload.get("argv") or [])
     if args.tube is None:
         raise ValueError("mesh export needs a tube diameter (set tube ⌀ mm)")
     report = preflight(styled, tube_diameter=args.tube)

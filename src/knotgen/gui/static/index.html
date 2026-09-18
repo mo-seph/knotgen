@@ -391,6 +391,16 @@ $('tightness').addEventListener('input', () => $('tightval').textContent = $('ti
 $('follow').addEventListener('input', () => $('followval').textContent = $('follow').value);
 $('layout').addEventListener('change', () =>
   $('racetrackopts').classList.toggle('hidden', $('layout').value !== 'racetrack'));
+// with relax on, polish always runs inside it — the checkbox only
+// applies to unrelaxed designs, so grey it out to say so
+function syncPolishBox() {
+  const r = $('relax').checked;
+  $('polish').disabled = r;
+  $('polish').parentElement.querySelector('label').textContent =
+    r ? 'polish (runs inside relax)' : 'polish (smooth wobble)';
+}
+$('relax').addEventListener('change', syncPolishBox);
+syncPolishBox();
 
 // ---------- API ----------
 async function post(url, body) {
@@ -414,6 +424,12 @@ function showReport(data) {
     parts.push(`<pre>relaxed in ${data.relax.iterations} iterations: gap ` +
       `${data.relax.gap_before.toFixed(1)} → ${data.relax.gap_after.toFixed(1)} mm, ` +
       `bend r ${data.relax.bend_before.toFixed(1)} → ${data.relax.bend_after.toFixed(1)} mm</pre>`);
+  }
+  const p = (data.relax && data.relax.polish) || data.polish;
+  if (p && p.passes > 0) {
+    parts.push(`<pre>polish: ${p.passes} passes, wobble ` +
+      `−${Math.round(100 * p.wobble_reduction)}%, ` +
+      `fits ⌀${p.est_before} → ⌀${p.est_after} mm</pre>`);
   }
   if (data.strip_metrics) {
     const m = data.strip_metrics;
