@@ -252,6 +252,7 @@ scene.add(grid);
 let designGroup = new THREE.Group();
 scene.add(designGroup);
 let tubeMeshes = [], stripMeshes = [];
+let lastFitName = null;
 
 function resize() {
   const w = holder.clientWidth, h = holder.clientHeight;
@@ -305,7 +306,10 @@ function buildScene(data) {
   });
   scene.add(designGroup);
   applyToggles();
-  // fit camera + grid to the design
+  // fit camera + grid on a NEW knot; parameter tweaks to the same knot
+  // keep the viewport, so regenerated changes are easy to compare
+  if (data.name === lastFitName) return;
+  lastFitName = data.name;
   const box = new THREE.Box3().setFromObject(designGroup);
   const size = box.getSize(new THREE.Vector3()).length();
   const center = box.getCenter(new THREE.Vector3());
