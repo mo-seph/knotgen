@@ -124,6 +124,7 @@
       <div class="row"><label for="depth">depth mm <span class="hint">(blank = auto)</span></label><input id="depth" type="number" step="5" placeholder="auto"/></div>
       <div class="row"><label for="tightness">tightness <span id="tightval">0</span></label>
         <input id="tightness" type="range" min="-1" max="1" step="0.05" value="0"/></div>
+      <div class="row"><label for="polish" title="adaptive smoothing: damps wobble as far as clearance allows (relax does this automatically)">polish (smooth wobble)</label><input id="polish" type="checkbox"/></div>
       <div class="row"><label for="source">source</label>
         <select id="source"><option>auto</option><option>fremlin</option><option>torus</option><option>ideal</option></select></div>
       <div class="row"><label for="variant">variant</label><input id="variant" type="text" placeholder="(default)"/></div>
@@ -338,6 +339,7 @@ function buildArgv() {
   if (num('breadth') !== null) a.push('--breadth', num('breadth'));
   if (num('depth') !== null) a.push('--depth', num('depth'));
   add('--tightness', 'tightness', 0);
+  if ($('polish').checked) a.push('--polish');
   if ($('source').value !== 'auto') a.push('--source', $('source').value);
   if ($('variant').value.trim()) a.push('--variant', $('variant').value.trim());
   add('--rho', 'rho', 0.4);

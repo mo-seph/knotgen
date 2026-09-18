@@ -149,6 +149,11 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--relax-max", action="store_true",
                      help="push the relaxation much harder: bigger iteration "
                           "budget and more patience before declaring a plateau")
+    gen.add_argument("--polish", action="store_true",
+                     help="adaptive smoothing: damp high-frequency wobble as "
+                          "far as the clearance budget allows, stopping where "
+                          "it would cost tube size (relax runs this "
+                          "automatically; the flag applies it without --relax)")
     gen.add_argument("--fit-points", type=int, default=60, metavar="N",
                      help="points for the editable fitted-spline representation in the "
                           "export (default 60)")
@@ -445,6 +450,16 @@ def cmd_gen(args: argparse.Namespace) -> int:
                     else "try --relax-max to push harder, or increase --width")
             print(f"  ! plateaued short of the target: this layout tops out "
                   f"around a {info['max_tube_est']:g} mm tube ({hint})")
+
+    if args.polish and not args.relax:
+        from knotgen.relax import spectral_polish
+
+        styled, pinfo = spectral_polish(
+            styled, max_depth=args.depth if args.depth else None
+        )
+        print(f"  polished: {pinfo['passes']} passes, wobble "
+              f"-{100 * pinfo['wobble_reduction']:.0f}%, "
+              f"fits \u2300{pinfo['est_before']} -> \u2300{pinfo['est_after']} mm")
 
     if args.wall:
         from knotgen.transforms import floor_z

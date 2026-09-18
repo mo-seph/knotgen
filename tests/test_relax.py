@@ -74,3 +74,30 @@ def test_relax_controls_length_growth():
     rk, _ = relax(k, tube=40.0, iterations=80)
     len1 = as_link(rk).components[0].total_length()
     assert len1 <= 1.35 * len0
+
+
+def test_spectral_polish_reduces_wobble_not_tube():
+    from knotgen.relax import spectral_polish
+
+    k = apply_style(resolve("11a2", source="ideal"), width=300, depth=50,
+                    tightness=-0.15)
+    polished, info = spectral_polish(k)
+    assert info["passes"] >= 1
+    assert info["wobble_reduction"] > 0.0
+    # tube budget respected: never loses more than the floor allows
+    assert info["est_after"] >= 0.99 * info["est_before"]
+
+
+def test_spectral_polish_preserves_symmetry_and_width():
+    from knotgen.relax import spectral_polish
+
+    k = apply_style(resolve("5_1"), width=300, depth=25)
+    polished, _ = spectral_polish(k)
+    assert polished.rotational_symmetry_order() == 5
+    assert polished.extents()["xy_diameter"] == pytest.approx(300.0, rel=1e-3)
+
+
+def test_relax_reports_polish():
+    k = apply_style(resolve("5_1"), width=300, depth=25)
+    _, info = relax(k, tube=16.0, iterations=30)
+    assert "polish" in info

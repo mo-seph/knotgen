@@ -125,6 +125,81 @@ def _sample_all(link: FourierLink, per_comp: list[int]):
     return ts, pts, np.concatenate(comp_id), np.concatenate(idx)
 
 
+def spectral_polish(
+    design: FourierKnot | FourierLink,
+    max_depth: float | None = None,
+    floor: float = 0.995,
+    max_passes: int = 24,
+) -> tuple[FourierKnot | FourierLink, dict]:
+    """Damp high harmonics as far as the clearance budget allows.
+
+    Wobble and kinks are high-frequency Fourier content; the broad sweep of
+    the design lives in the low harmonics. Each pass applies a gentle
+    low-pass weight (about 0.70 at the top harmonic, ~1 at the bottom) and
+    is accepted while the achievable tube — min of strand clearance and
+    2x bend radius — stays within `floor` of the best seen, so smoothing
+    stops exactly where it would start costing tube size. Symmetry is
+    preserved automatically: the filter never moves energy between
+    harmonics, only shrinks it.
+    """
+    from knotgen.geometry import max_curvature, min_clearance
+
+    single = isinstance(design, FourierKnot)
+    link = as_link(design)
+    width0 = link.extents()["xy_diameter"]
+
+    def est_of(candidate: FourierLink) -> float:
+        g, _, _ = min_clearance(candidate)
+        km, _ = max_curvature(candidate)
+        return min(g / CLEARANCE_SAFETY, 2.0 / (km * BEND_SAFETY))
+
+    def wobble_of(candidate: FourierLink) -> float:
+        t = np.linspace(0.0, TAU, 1024, endpoint=False)
+        return sum(float(np.mean(c.curvature(t) ** 2) * c.total_length())
+                   for c in candidate.components)
+
+    est0 = est_of(link)
+    wob0 = wobble_of(link)
+    accepted, ceiling, passes = link, est0, 0
+    for _ in range(max_passes):
+        comps = []
+        for c in accepted.components:
+            j = np.arange(c.a.shape[1])
+            n = max(c.a.shape[1] - 1, 1)
+            w = np.exp(-0.35 * (j / n) ** 2)
+            w[0] = 1.0  # never touch the centring
+            comps.append(c.harmonic_filtered(w))
+        cand = FourierLink(components=comps, name=link.name, meta=link.meta)
+        s = width0 / cand.extents()["xy_diameter"]
+        cand = FourierLink(components=cand.scaled(s, s, s).components,
+                           name=link.name, meta=link.meta)
+        if max_depth is not None:
+            z = cand.extents()["z_extent"]
+            if z > max_depth:
+                cand = FourierLink(
+                    components=cand.scaled(1.0, 1.0, max_depth / z).components,
+                    name=link.name, meta=link.meta)
+        est = est_of(cand)
+        ceiling = max(ceiling, est)
+        if est >= floor * ceiling:
+            accepted, passes = cand, passes + 1
+        else:
+            break
+
+    info = {
+        "passes": passes,
+        "est_before": round(est0, 2),
+        "est_after": round(est_of(accepted), 2),
+        "wobble_reduction": round(1.0 - wobble_of(accepted) / max(wob0, 1e-12), 3),
+    }
+    if single:
+        out = accepted.components[0]
+        out.name = design.name
+        out.meta = dict(design.meta)
+        return out, info
+    return accepted, info
+
+
 def relax(
     design: FourierKnot | FourierLink,
     tube: float,
@@ -443,6 +518,23 @@ def relax(
                 FourierLink(components=best_comps, name=link.name, meta=link.meta)
             )
 
+    # final spectral polish: shed the high-frequency residue the force
+    # iterations leave behind, exactly as far as the clearance affords
+    polished, polish_info = spectral_polish(
+        FourierLink(components=best_comps, name=link.name, meta=link.meta),
+        max_depth=max_depth,
+    )
+    if polish_info["passes"] > 0:
+        best_comps = list(polished.components)
+        _, best_gap, best_bend = score_of(
+            FourierLink(components=best_comps, name=link.name, meta=link.meta)
+        )
+        if verbose:
+            print(f"    polish: {polish_info['passes']} passes, wobble "
+                  f"-{100 * polish_info['wobble_reduction']:.0f}%, "
+                  f"fits ⌀{polish_info['est_before']} -> "
+                  f"⌀{polish_info['est_after']}")
+
     result = FourierLink(components=best_comps, name=link.name, meta=dict(link.meta))
     gap1, kap1 = best_gap, 1.0 / best_bend
     result.meta["relaxed"] = {
@@ -455,6 +547,7 @@ def relax(
         "max_tube_est": round(
             min(2.0 * (1.0 / kap1) / 1.1, gap1 / 1.05), 1
         ),
+        "polish": polish_info,
     }
     info = result.meta["relaxed"]
     if single:
