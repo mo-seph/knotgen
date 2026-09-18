@@ -209,6 +209,7 @@ def relax(
     verbose: bool = False,
     method: str = "forces",
     polish_floor: float = 0.995,
+    anneal_from: float | None = None,
 ) -> tuple[FourierKnot | FourierLink, dict]:
     """Return (relaxed design, info). Sizes in mm; run AFTER apply_style.
 
@@ -218,7 +219,12 @@ def relax(
     original layout. Stops early once progress plateaus.
 
     max_depth: keep the design's z extent within this budget (mm) while
-    relaxing. push: grind much harder (more iterations, more patience).
+    relaxing. anneal_from: start the depth budget there and tighten it
+    gradually to max_depth over the first 60% of the iteration budget —
+    the optimiser then always faces a small deficit it can fix with small
+    (low-frequency) moves, instead of a big crush it papers over with
+    high-frequency bumps. push: grind much harder (more iterations, more
+    patience).
 
     method: 'forces' (default) = the tuned repulsion + bend-relief pair;
     'gm' = one unified force from the Gonzalez-Maddocks tangent-point
@@ -272,7 +278,16 @@ def relax(
     stagnant = 0
     done_at = iterations
     gain = 1.0
+    prev_budget = anneal_from  # z clamp the CURRENT comps last saw
     for it in range(iterations):
+        z_budget = max_depth
+        annealing = (anneal_from is not None and max_depth is not None
+                     and anneal_from > max_depth)
+        if annealing:
+            f = min(it / max(0.6 * iterations, 1.0), 1.0)
+            f = f * f * (3.0 - 2.0 * f)  # smoothstep
+            z_budget = anneal_from + (max_depth - anneal_from) * f
+            annealing = f < 1.0
         work = FourierLink(components=comps, name=link.name, meta=link.meta)
         ts, pts_list, comp_id, idx = _sample_all(work, per_comp)
         P = np.vstack(pts_list)
@@ -307,8 +322,13 @@ def relax(
             gain = max(gain * 0.7, 0.1)
         else:
             gain = min(gain * 1.1, 1.0)
+        # while annealing, the current state may exceed the FINAL depth
+        # budget — it must not become the "best" only to be crushed by the
+        # end-of-run squash (the exact disease annealing is curing)
+        z_ok = (max_depth is None or prev_budget is None
+                or prev_budget <= max_depth * 1.001)
         cur_key = (round(min(cur_score, 1.0), 4), round(est_tube, 2))
-        if cur_key > best_key:
+        if z_ok and cur_key > best_key:
             best_key = cur_key
             best_score = cur_score
             best_gap, best_bend = cur_gap, 1.0 / kmax
@@ -318,8 +338,11 @@ def relax(
         else:
             stagnant += 1
         if stagnant >= patience:
-            done_at = it
-            break
+            if annealing:
+                stagnant = 0  # the target is still moving; keep going
+            else:
+                done_at = it
+                break
 
         # steer effort toward the BINDING constraint: a bend-limited knot
         # gets more un-kinking and less (interfering) repulsion, and vice
@@ -438,10 +461,10 @@ def relax(
         # force (smoothed below like the rest) — the old per-iteration hard
         # z-rescale squashed every bump back into a kink, so depth-limited
         # relaxation kept undoing its own bend relief
-        if max_depth is not None:
+        if z_budget is not None:
             zc = 0.5 * (P[:, 2].min() + P[:, 2].max())
             dz = P[:, 2] - zc
-            over_z = np.abs(dz) - 0.45 * max_depth
+            over_z = np.abs(dz) - 0.45 * z_budget
             F_rep[:, 2] -= DEPTH_GAIN * np.sign(dz) * np.maximum(over_z, 0.0)
 
         # smooth each field at its own scale and combine
@@ -483,15 +506,16 @@ def relax(
         s = width0 / work.extents()["xy_diameter"]
         comps = work.scaled(s, s, s).components
 
-        if max_depth is not None:
+        if z_budget is not None:
             # exact backstop: the soft z-force does the real work, so any
             # excess here is a few percent — clamping it keeps every scored
             # state genuinely within budget (the old code clamped 2-4x
             # overshoots, which re-kinked the whole design every iteration)
             check = FourierLink(components=comps, name=link.name, meta=link.meta)
             z = check.extents()["z_extent"]
-            if z > max_depth:
-                comps = check.scaled(1.0, 1.0, max_depth / z).components
+            if z > z_budget:
+                comps = check.scaled(1.0, 1.0, z_budget / z).components
+        prev_budget = z_budget
 
         if verbose and (it % 5 == 4 or it == iterations - 1):
             check = FourierLink(components=comps, name=link.name, meta=link.meta)
@@ -504,6 +528,9 @@ def relax(
     # whatever path exited the loop, give the final state a chance to win
     final = FourierLink(components=comps, name=link.name, meta=link.meta)
     s, g, br = score_of(final)
+    if (max_depth is not None and prev_budget is not None
+            and prev_budget > max_depth * 1.001):
+        s = -1.0  # run ended mid-anneal: the final state is over-budget
     if s > best_score:
         best_score, best_gap, best_bend = s, g, br
         best_comps = list(comps)

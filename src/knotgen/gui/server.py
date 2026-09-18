@@ -92,8 +92,13 @@ def _styled_from_args(args):
         )
     except KeyError as exc:
         raise ValueError(str(exc.args[0]) if exc.args else str(exc)) from None
+    anneal_from = None
+    style_depth = args.depth
+    if args.relax_anneal and args.relax and args.depth:
+        style_depth = args.depth * args.relax_anneal
+        anneal_from = style_depth
     styled = apply_style(
-        knot, width=args.width, breadth=args.breadth, depth=args.depth,
+        knot, width=args.width, breadth=args.breadth, depth=style_depth,
         tightness=args.tightness,
     )
 
@@ -115,9 +120,22 @@ def _styled_from_args(args):
             max_depth=max_depth, push=args.relax_max, verbose=False,
             method=args.relax_method,
             polish_floor=1.0 - min(max(args.polish_budget, 0.0), 30.0) / 100.0,
+            anneal_from=anneal_from,
         )
         relax_info = {k: (float(v) if hasattr(v, "item") or isinstance(v, float) else v)
                       for k, v in relax_info.items()}
+
+    if args.squeeze_to:
+        from knotgen.link import as_link as _al
+        from knotgen.relax import spectral_polish as _sp
+
+        z_now = _al(styled).extents()["z_extent"]
+        if args.squeeze_to < z_now:
+            styled = styled.scaled(1.0, 1.0, args.squeeze_to / z_now)
+            styled, _sq = _sp(
+                styled, max_depth=args.squeeze_to,
+                floor=1.0 - min(max(args.polish_budget, 0.0), 30.0) / 100.0,
+            )
 
     polish_info = None
     if args.polish and not args.relax:
@@ -288,6 +306,12 @@ def api_generate(payload: dict) -> dict:
         strip_metrics = {k: (v if v != float("inf") else None)
                          for k, v in strip_metrics.items()}
 
+    from knotgen.gm import tight_spots
+
+    try:
+        spots = tight_spots(styled)
+    except Exception:
+        spots = []
     sym = styled.rotational_symmetry_order()
     return {
         "name": styled.name,
@@ -308,6 +332,7 @@ def api_generate(payload: dict) -> dict:
         },
         "relax": relax_info,
         "polish": polish_info,
+        "tight_spots": spots,
         "warnings": warnings,
     }
 

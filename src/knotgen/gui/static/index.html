@@ -149,6 +149,8 @@
       <div class="row"><label for="relax">relax clearance</label><input id="relax" type="checkbox"/></div>
       <div class="row"><label for="relaxiter">max iterations</label><input id="relaxiter" type="number" value="150" step="50"/></div>
       <div class="row"><label for="relaxmaxdepth">max depth mm</label><input id="relaxmaxdepth" type="number" step="5" placeholder="= depth"/></div>
+      <div class="row"><label for="relaxanneal" title="style at F x depth, tighten gradually during relax — smooth low-frequency fixes instead of wiggle">anneal depth ×</label><input id="relaxanneal" type="number" step="0.1" min="1" max="3" placeholder="off"/></div>
+      <div class="row"><label for="squeezeto" title="after relax/polish: scale z down to this depth and re-polish (fit gently, squash a little)">squeeze to mm</label><input id="squeezeto" type="number" step="5" placeholder="off"/></div>
       <div class="row"><label for="relaxmethod">method</label>
         <select id="relaxmethod"><option>gm</option><option>forces</option></select></div>
       <div class="row"><label for="relaxmax">push hard (--relax-max)</label><input id="relaxmax" type="checkbox"/></div>
@@ -201,6 +203,7 @@
     <label><input id="showtube" type="checkbox" checked/> tube</label>
     <label><input id="showstrip" type="checkbox" checked/> strip</label>
     <label><input id="showgrid" type="checkbox" checked/> grid</label>
+    <label title="orange = tight turn (bend-limited), red = tight gap between strands"><input id="showspots" type="checkbox" checked/> tight spots</label>
     <label><input id="spin" type="checkbox"/> spin</label>
   </div>
   <div id="report" class="overlay hidden"></div>
@@ -251,7 +254,7 @@ grid.rotation.x = Math.PI / 2;
 scene.add(grid);
 let designGroup = new THREE.Group();
 scene.add(designGroup);
-let tubeMeshes = [], stripMeshes = [];
+let tubeMeshes = [], stripMeshes = [], spotMeshes = [];
 let lastFitName = null;
 
 function resize() {
@@ -271,7 +274,7 @@ renderer.setAnimationLoop(() => {
 function buildScene(data) {
   scene.remove(designGroup);
   designGroup = new THREE.Group();
-  tubeMeshes = []; stripMeshes = [];
+  tubeMeshes = []; stripMeshes = []; spotMeshes = [];
   // no real tube set: display-only tube, thin when a strip needs to show through
   const radius = (data.tube_mm ? data.tube_mm : data.strips ? 5 : 12) / 2;
   data.components.forEach((pts, ci) => {
@@ -304,6 +307,22 @@ function buildScene(data) {
     const mesh = new THREE.Mesh(geo, mat);
     designGroup.add(mesh); stripMeshes.push(mesh);
   });
+  // tight-spot markers: orange ring = tight turn, red sphere = tight gap
+  (data.tight_spots || []).forEach(sp => {
+    const tight = Math.max(3, radius * 0.6);
+    let m;
+    if (sp.kind === 'turn') {
+      m = new THREE.Mesh(
+        new THREE.TorusGeometry(tight * 1.6, tight * 0.28, 10, 24),
+        new THREE.MeshBasicMaterial({ color: 0xe8912a, transparent: true, opacity: 0.85 }));
+    } else {
+      m = new THREE.Mesh(
+        new THREE.SphereGeometry(tight, 16, 12),
+        new THREE.MeshBasicMaterial({ color: 0xe05555, transparent: true, opacity: 0.75 }));
+    }
+    m.position.set(...sp.xyz);
+    designGroup.add(m); spotMeshes.push(m);
+  });
   scene.add(designGroup);
   applyToggles();
   // fit camera + grid on a NEW knot; parameter tweaks to the same knot
@@ -325,10 +344,11 @@ function applyToggles() {
   const hasStrip = stripMeshes.length > 0;
   tubeMeshes.forEach(m => m.visible = $('showtube').checked);
   stripMeshes.forEach(m => m.visible = $('showstrip').checked);
+  spotMeshes.forEach(m => m.visible = $('showspots').checked);
   grid.visible = $('showgrid').checked;
   $('showstrip').parentElement.style.display = hasStrip ? '' : 'none';
 }
-['showtube', 'showstrip', 'showgrid'].forEach(id =>
+['showtube', 'showstrip', 'showgrid', 'showspots'].forEach(id =>
   $(id).addEventListener('change', applyToggles));
 
 // ---------- command builder ----------
@@ -346,6 +366,7 @@ function buildArgv() {
   add('--tightness', 'tightness', 0);
   if ($('polish').checked) a.push('--polish');
   add('--polish-budget', 'polishbudget', 0.5);
+  if (num('squeezeto') !== null) a.push('--squeeze-to', num('squeezeto'));
   if ($('source').value !== 'auto') a.push('--source', $('source').value);
   if ($('variant').value.trim()) a.push('--variant', $('variant').value.trim());
   add('--rho', 'rho', 0.4);
@@ -363,6 +384,7 @@ function buildArgv() {
     add('--relax-iterations', 'relaxiter', 150);
     if (num('relaxmaxdepth') !== null) a.push('--relax-max-depth', num('relaxmaxdepth'));
     if ($('relaxmethod').value !== 'gm') a.push('--relax-method', $('relaxmethod').value);
+    if (num('relaxanneal') !== null) a.push('--relax-anneal', num('relaxanneal'));
     if ($('relaxmax').checked) a.push('--relax-max');
   }
   if (num('strip') !== null) {

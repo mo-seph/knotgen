@@ -88,6 +88,8 @@ Knot names are Rolfsen (`3_1`, `5_2`, `8_19`, ...), or `"T(p,q)"` for a raw toru
 | `--force` | write `--out` / `--mesh` even when the tube check fails (useful when it's close) — the JSON records the failing check, and a forced mesh may self-intersect |
 | `--mesh-detail F` | mesh resolution multiplier (default 1): `2` = twice the segments around and along the tube (~4× the triangles) for slicer-smooth prints, `0.5` = coarser |
 | `--polish` | adaptive smoothing without relaxing: damp high-frequency wobble exactly as far as the clearance budget allows (`--relax` runs this automatically as its final step) |
+| `--relax-anneal [F]` | depth annealing: style at F × the requested depth (default 1.4) and tighten the budget gradually during relax — the optimiser fixes small deficits with smooth low-frequency moves instead of high-frequency wiggle. The best of both from the depth-tradeoff: near-direct clearance, squash-route smoothness |
+| `--squeeze-to MM` | after relax/polish: scale z down to this depth and re-polish — "fit gently, squash a little". Sub-linear tube cost for small squashes (bend radii in vertical planes degrade quadratically, so big squashes burn margin fast) |
 | `--polish-budget PCT` | let the polish *spend* tube size on smoothness: e.g. `5` accepts up to 5% smaller max tube for calmer curves and rounder kinks (default 0.5; applies to `--polish` and the polish inside `--relax`) |
 | `--preview` / `--save-png FILE` | 3D view (curvature-coloured, crossing markers in red) |
 
@@ -97,7 +99,7 @@ Every `gen` prints:
 
 - **min bend radius** — tightest curve radius; a tube of radius bigger than this self-intersects locally ("body would intersect itself" in Fusion),
 - **min strand gap** — closest approach between different strands; the tube diameter must fit inside it,
-- **max tube diameter** — the binding constraint of the two, with safety factors.
+- **max tube diameter** — the binding constraint of the two, with safety factors, and *which* one binds (`limited by bend radius` / `limited by strand gap`) so you know which knob helps. The GUI also marks the tight spots on the model: orange rings = tight turns, red spheres = tight gaps (toggleable).
 
 If `--tube` fails the check, nothing is exported and the message says which knob to turn (usually `--depth`, `--width`, or `--tightness`).
 

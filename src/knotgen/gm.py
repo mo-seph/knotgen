@@ -115,3 +115,75 @@ def thickness(
         "min_tp_radius": min_tp if np.isfinite(min_tp) else None,
         "max_tube_diameter": 2.0 * thick,
     }
+
+
+def tight_spots(
+    knot: FourierKnot | FourierLink,
+    slack: float = 1.35,
+    samples: int = 1024,
+    max_spots: int = 12,
+) -> list[dict]:
+    """The places that limit (or nearly limit) the tube: every location
+    whose GM radius is within `slack` of the curve's thickness.
+
+    Returns [{'xyz': [x,y,z], 'radius': r, 'kind': 'turn'|'gap'}, ...],
+    tightest first, de-duplicated so markers don't pile up on one feature.
+    'turn' = local bending (open the turn to improve); 'gap' = two
+    passages too close (more depth/width to improve).
+    """
+    link = as_link(knot)
+    P, T, comp_id, idx, counts = _sampled(link, samples)
+    ds_comp = np.array([c.total_length() for c in link.components]) / np.array(counts)
+    thick = thickness(link, samples)["thickness"]
+    limit = slack * thick
+
+    cand: list[tuple[float, np.ndarray, str]] = []
+
+    # local curvature spots
+    tloc = np.linspace(0.0, TAU, 2048, endpoint=False)
+    for comp in link.components:
+        kap = comp.curvature(tloc)
+        r = 1.0 / np.maximum(kap, 1e-12)
+        hot = r < limit
+        if not hot.any():
+            continue
+        pts = comp.eval(tloc)
+        # local minima of radius within the hot region
+        is_min = (r <= np.roll(r, 1)) & (r <= np.roll(r, -1)) & hot
+        for i in np.flatnonzero(is_min):
+            cand.append((float(r[i]), pts[i], "turn"))
+
+    # tangent-point spots (doubled-back passages and cross-component)
+    tree = cKDTree(P)
+    pairs = tree.query_pairs(r=2.0 * limit, output_type="ndarray")
+    if len(pairs):
+        i, j = pairs[:, 0], pairs[:, 1]
+        same = comp_id[i] == comp_id[j]
+        gap = np.abs(idx[i] - idx[j])
+        n_arr = np.array(counts)[comp_id[i]]
+        gap = np.minimum(gap, n_arr - gap)
+        keep = ~(same & (gap <= 2))
+        i, j, same, gap = i[keep], j[keep], same[keep], gap[keep]
+        if len(i):
+            r_ij, _ = tangent_point_radii(P, T, i, j)
+            r_ji, _ = tangent_point_radii(P, T, j, i)
+            r = np.minimum(r_ij, r_ji)
+            hot = r < limit
+            arc = gap * ds_comp[comp_id[i]]
+            for k in np.flatnonzero(hot):
+                mid = 0.5 * (P[i[k]] + P[j[k]])
+                near_turn = same[k] and arc[k] <= np.pi * r[k] * 1.5
+                cand.append((float(r[k]),
+                             mid, "turn" if near_turn else "gap"))
+
+    cand.sort(key=lambda c: c[0])
+    spots: list[dict] = []
+    for r, xyz, kind in cand:
+        if any(np.linalg.norm(xyz - np.array(s["xyz"])) < 4.0 * thick
+               for s in spots):
+            continue
+        spots.append({"xyz": [round(float(v), 2) for v in xyz],
+                      "radius": round(r, 2), "kind": kind})
+        if len(spots) >= max_spots:
+            break
+    return spots

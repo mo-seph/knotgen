@@ -140,6 +140,19 @@ def build_parser() -> argparse.ArgumentParser:
                           "when you gave one (an explicit depth is a design "
                           "decision), otherwise unlimited; 0 = explicitly "
                           "unlimited")
+    gen.add_argument("--relax-anneal", type=float, nargs="?", const=1.4,
+                     default=None, metavar="F",
+                     help="depth annealing: style at F x the requested depth "
+                          "(default F=1.4 when the flag is given bare) and "
+                          "tighten the budget gradually to --depth during "
+                          "relax — small deficits get fixed with smooth "
+                          "low-frequency moves instead of wiggle. Needs "
+                          "--relax and --depth")
+    gen.add_argument("--squeeze-to", type=float, default=None, metavar="MM",
+                     help="after relax/polish, scale z down to this depth and "
+                          "re-polish: 'fit gently, squash a little' — keeps "
+                          "the smooth aesthetics at a modest tube cost "
+                          "(sub-linear for small squashes)")
     gen.add_argument("--relax-method", choices=["gm", "forces"], default="gm",
                      help="relaxation force law: 'gm' (default) = one unified "
                           "force from the Gonzalez-Maddocks tangent-point "
@@ -415,11 +428,20 @@ def cmd_gen(args: argparse.Namespace) -> int:
         braid_split=args.braid_split,
         wall=args.wall,
     )
+    anneal_from = None
+    style_depth = args.depth
+    if args.relax_anneal:
+        if not (args.relax and args.depth):
+            print("  ! --relax-anneal needs --relax and --depth; ignored")
+        else:
+            style_depth = args.depth * args.relax_anneal
+            anneal_from = style_depth
+            print(f"  relax: annealing depth {style_depth:g} -> {args.depth:g} mm")
     styled = apply_style(
         knot,
         width=args.width,
         breadth=args.breadth,
-        depth=args.depth,
+        depth=style_depth,
         tightness=args.tightness,
     )
     if args.relax:
@@ -448,6 +470,7 @@ def cmd_gen(args: argparse.Namespace) -> int:
             verbose=True,
             method=args.relax_method,
             polish_floor=1.0 - min(max(args.polish_budget, 0.0), 30.0) / 100.0,
+            anneal_from=anneal_from,
         )
         print(f"  relaxed in {info['iterations']} iterations: "
               f"strand gap {info['gap_before']:g} -> {info['gap_after']:g} mm, "
@@ -457,6 +480,29 @@ def cmd_gen(args: argparse.Namespace) -> int:
                     else "try --relax-max to push harder, or increase --width")
             print(f"  ! plateaued short of the target: this layout tops out "
                   f"around a {info['max_tube_est']:g} mm tube ({hint})")
+
+    if args.polish_budget > 30.0:
+        print("  ! --polish-budget is capped at 30 (percent)")
+
+    if args.squeeze_to:
+        from knotgen.link import as_link as _as_link
+        from knotgen.relax import spectral_polish as _sp
+
+        z_now = _as_link(styled).extents()["z_extent"]
+        if args.squeeze_to < z_now:
+            sz = args.squeeze_to / z_now
+            styled = styled.scaled(1.0, 1.0, sz)
+            styled, sq_info = _sp(
+                styled, max_depth=args.squeeze_to,
+                floor=1.0 - min(max(args.polish_budget, 0.0), 30.0) / 100.0,
+            )
+            print(f"  squeezed z {z_now:.0f} -> {args.squeeze_to:g} mm "
+                  f"(x{sz:.3f}), re-polished {sq_info['passes']} passes: "
+                  f"fits \u2300{sq_info['est_before']} -> "
+                  f"\u2300{sq_info['est_after']} mm")
+        else:
+            print(f"  --squeeze-to {args.squeeze_to:g}: design is already "
+                  f"within that depth (z {z_now:.0f} mm); nothing to squeeze")
 
     if args.polish and not args.relax:
         from knotgen.relax import spectral_polish

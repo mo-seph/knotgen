@@ -80,3 +80,19 @@ def test_check_mesh_from_saved_json(tmp_path, monkeypatch, capsys):
     assert code == 0
     assert "triangles" in capsys.readouterr().out
     assert (tmp_path / "output" / "k.stl").stat().st_size > 1000
+
+
+def test_squeeze_to_flag(capsys):
+    main(["5_1", "--width", "250", "--depth", "40", "--squeeze-to", "25"])
+    out = capsys.readouterr().out
+    assert "squeezed z" in out
+
+
+def test_relax_anneal_needs_relax_and_depth(capsys):
+    main(["5_1", "--width", "250", "--relax-anneal"])
+    assert "--relax-anneal needs" in capsys.readouterr().out
+
+
+def test_limiter_reported(capsys):
+    main(["5_1", "--width", "250", "--depth", "25"])
+    assert "limited by" in capsys.readouterr().out

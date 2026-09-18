@@ -23,15 +23,20 @@ class PreflightReport:
     min_bend_radius_mm: float
     min_clearance_mm: float
     max_tube_diameter_mm: float
+    limiter: str = "bend"  # which constraint sets max_tube: 'bend' or 'gap'
     tube_diameter_mm: float | None = None
     ok_for_tube: bool | None = None
     warnings: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
+        which = ("bend radius (open tight turns to improve)"
+                 if self.limiter == "bend"
+                 else "strand gap (more depth/width to improve)")
         lines = [
             f"  min bend radius:    {self.min_bend_radius_mm:8.1f} mm",
             f"  min strand gap:     {self.min_clearance_mm:8.1f} mm",
-            f"  max tube diameter:  {self.max_tube_diameter_mm:8.1f} mm",
+            f"  max tube diameter:  {self.max_tube_diameter_mm:8.1f} mm"
+            f"   ← limited by {which}",
         ]
         if self.tube_diameter_mm is not None:
             verdict = "OK" if self.ok_for_tube else "WON'T FIT"
@@ -45,12 +50,15 @@ def preflight(knot: FourierKnot, tube_diameter: float | None = None) -> Prefligh
     bend_radius = 1.0 / kappa
     clearance, _, _ = min_clearance(knot)
 
-    max_tube = min(2.0 * bend_radius / BEND_SAFETY, clearance / CLEARANCE_SAFETY)
+    bend_limit = 2.0 * bend_radius / BEND_SAFETY
+    gap_limit = clearance / CLEARANCE_SAFETY
     report = PreflightReport(
         min_bend_radius_mm=bend_radius,
         min_clearance_mm=clearance,
-        max_tube_diameter_mm=max_tube,
+        max_tube_diameter_mm=min(bend_limit, gap_limit),
+        limiter="bend" if bend_limit <= gap_limit else "gap",
     )
+    max_tube = report.max_tube_diameter_mm
 
     if tube_diameter is not None:
         report.tube_diameter_mm = tube_diameter

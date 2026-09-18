@@ -76,3 +76,32 @@ def test_relax_gm_never_worse_than_input():
     s0 = preflight(k).max_tube_diameter_mm
     rk, _ = relax(k, tube=16.0, iterations=20, method="gm")
     assert preflight(rk).max_tube_diameter_mm >= s0 * 0.999
+
+
+def test_tight_spots_classify_turn_and_gap():
+    from knotgen.gm import tight_spots
+
+    # stacked circles: the tightness is the 12 mm gap between them
+    link = FourierLink(components=[_circle(50.0), _circle(50.0, dz=12.0)],
+                       name="stack", meta={})
+    spots = tight_spots(link)
+    assert spots and spots[0]["kind"] == "gap"
+    assert spots[0]["radius"] == pytest.approx(6.0, rel=0.05)
+
+    # squashed ellipse: the tightness is bending at the tips
+    a = np.zeros((3, 2)); b = np.zeros((3, 2))
+    a[0, 1] = 100.0; b[1, 1] = 10.0
+    spots = tight_spots(FourierKnot(a=a, b=b, name="e", meta={}))
+    assert spots and all(s["kind"] == "turn" for s in spots)
+
+
+def test_relax_anneal_lands_in_budget_smoothly():
+    k_gentle = apply_style(resolve("11a2", source="ideal"), width=300,
+                           depth=70, tightness=-0.15)
+    out, info = relax(k_gentle, tube=40, iterations=80, max_depth=50,
+                      method="gm", anneal_from=70.0)
+    assert as_link(out).extents()["z_extent"] <= 50.0 * 1.001
+    crushed = apply_style(resolve("11a2", source="ideal"), width=300,
+                          depth=50, tightness=-0.15)
+    assert (preflight(out).max_tube_diameter_mm
+            > preflight(crushed).max_tube_diameter_mm)
