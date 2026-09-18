@@ -154,6 +154,12 @@ def build_parser() -> argparse.ArgumentParser:
                           "far as the clearance budget allows, stopping where "
                           "it would cost tube size (relax runs this "
                           "automatically; the flag applies it without --relax)")
+    gen.add_argument("--polish-budget", type=float, default=0.5, metavar="PCT",
+                     help="how much achievable tube size the polish may SPEND "
+                          "on smoothness, in percent (default 0.5). E.g. 5 = "
+                          "accept up to 5%% smaller max tube for calmer "
+                          "curves and rounder kinks; applies to --polish and "
+                          "to the polish at the end of --relax")
     gen.add_argument("--fit-points", type=int, default=60, metavar="N",
                      help="points for the editable fitted-spline representation in the "
                           "export (default 60)")
@@ -441,6 +447,7 @@ def cmd_gen(args: argparse.Namespace) -> int:
             push=args.relax_max,
             verbose=True,
             method=args.relax_method,
+            polish_floor=1.0 - min(max(args.polish_budget, 0.0), 30.0) / 100.0,
         )
         print(f"  relaxed in {info['iterations']} iterations: "
               f"strand gap {info['gap_before']:g} -> {info['gap_after']:g} mm, "
@@ -455,7 +462,8 @@ def cmd_gen(args: argparse.Namespace) -> int:
         from knotgen.relax import spectral_polish
 
         styled, pinfo = spectral_polish(
-            styled, max_depth=args.depth if args.depth else None
+            styled, max_depth=args.depth if args.depth else None,
+            floor=1.0 - min(max(args.polish_budget, 0.0), 30.0) / 100.0,
         )
         print(f"  polished: {pinfo['passes']} passes, wobble "
               f"-{100 * pinfo['wobble_reduction']:.0f}%, "

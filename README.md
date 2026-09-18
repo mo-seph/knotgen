@@ -88,6 +88,7 @@ Knot names are Rolfsen (`3_1`, `5_2`, `8_19`, ...), or `"T(p,q)"` for a raw toru
 | `--force` | write `--out` / `--mesh` even when the tube check fails (useful when it's close) — the JSON records the failing check, and a forced mesh may self-intersect |
 | `--mesh-detail F` | mesh resolution multiplier (default 1): `2` = twice the segments around and along the tube (~4× the triangles) for slicer-smooth prints, `0.5` = coarser |
 | `--polish` | adaptive smoothing without relaxing: damp high-frequency wobble exactly as far as the clearance budget allows (`--relax` runs this automatically as its final step) |
+| `--polish-budget PCT` | let the polish *spend* tube size on smoothness: e.g. `5` accepts up to 5% smaller max tube for calmer curves and rounder kinks (default 0.5; applies to `--polish` and the polish inside `--relax`) |
 | `--preview` / `--save-png FILE` | 3D view (curvature-coloured, crossing markers in red) |
 
 ### Pre-flight checks

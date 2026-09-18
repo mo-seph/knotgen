@@ -129,7 +129,7 @@ def spectral_polish(
     design: FourierKnot | FourierLink,
     max_depth: float | None = None,
     floor: float = 0.995,
-    max_passes: int = 24,
+    max_passes: int = 60,
 ) -> tuple[FourierKnot | FourierLink, dict]:
     """Damp high harmonics as far as the clearance budget allows.
 
@@ -208,6 +208,7 @@ def relax(
     push: bool = False,
     verbose: bool = False,
     method: str = "forces",
+    polish_floor: float = 0.995,
 ) -> tuple[FourierKnot | FourierLink, dict]:
     """Return (relaxed design, info). Sizes in mm; run AFTER apply_style.
 
@@ -522,7 +523,7 @@ def relax(
     # iterations leave behind, exactly as far as the clearance affords
     polished, polish_info = spectral_polish(
         FourierLink(components=best_comps, name=link.name, meta=link.meta),
-        max_depth=max_depth,
+        max_depth=max_depth, floor=polish_floor,
     )
     if polish_info["passes"] > 0:
         best_comps = list(polished.components)

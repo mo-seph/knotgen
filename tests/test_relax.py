@@ -101,3 +101,24 @@ def test_relax_reports_polish():
     k = apply_style(resolve("5_1"), width=300, depth=25)
     _, info = relax(k, tube=16.0, iterations=30)
     assert "polish" in info
+
+
+def test_polish_budget_spends_tube_on_smoothness():
+    from knotgen.relax import spectral_polish
+
+    k = apply_style(resolve("11a2", source="ideal"), width=300, depth=50,
+                    tightness=-0.15)
+    tight, ti = spectral_polish(k, floor=0.995)
+    loose, li = spectral_polish(k, floor=0.90)
+    assert li["passes"] >= ti["passes"]
+    assert li["wobble_reduction"] >= ti["wobble_reduction"]
+    # the budget is respected: never below floor x best-seen estimate
+    assert li["est_after"] >= 0.90 * max(li["est_before"], li["est_after"])
+
+
+def test_cli_polish_budget_flag(capsys):
+    from knotgen.cli import main
+
+    main(["5_1", "--width", "250", "--depth", "25", "--polish",
+          "--polish-budget", "5"])
+    assert "polished:" in capsys.readouterr().out
