@@ -84,6 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
                           "fully-3D ideal conformations keep their natural "
                           "proportions instead — squashing those creates jagged "
                           "near-cusps")
+    gen.add_argument("--up", choices=["z", "-z", "y", "-y", "x", "-x"], default="z",
+                     help="which axis of the source embedding becomes 'up' "
+                          "(the depth direction) before styling — some "
+                          "symmetric knots look far better squashed along y "
+                          "than along z (default z)")
     gen.add_argument("--tightness", type=float, default=0.0, metavar="T",
                      help="corner aesthetics, -1..1: negative rounds corners off (relaxed "
                           "rope), positive pinches lobes into small loops (petal look); "
@@ -161,11 +166,31 @@ def build_parser() -> argparse.ArgumentParser:
                           "length budget, so no coils/wiggle by construction; "
                           "'gm' = earlier ambition-driven dynamics with the "
                           "GM force; 'forces' = original repulsion + bend pair")
-    gen.add_argument("--rope-slack", type=float, default=0.10, metavar="F",
-                     help="sono: extra rope the relax may use beyond the knot's "
-                          "natural length, as a fraction (default 0.10) — a "
-                          "little is needed to round crushed kinks; a lot "
-                          "becomes wiggle")
+    gen.add_argument("--rope-slack", default="0.10", metavar="SPEC",
+                     help="sono: extra rope the relax may use beyond the "
+                          "design's length, as a fraction (default 0.10) — a "
+                          "little rounds crushed kinks; a lot becomes wiggle. "
+                          "Per component for links: '0.05,0.3' or 'c2:0.3' "
+                          "(a component on a tight budget stays a clean ring)")
+    gen.add_argument("--stiffness", default=None, metavar="SPEC",
+                     help="aesthetics: per-component resistance to bending "
+                          "(1 = default): a stiff component (e.g. 'c1:4') "
+                          "rounds toward a circle and shrugs off the pushes "
+                          "that grid-ify it; a floppy one ('c3:0.3') absorbs "
+                          "the deformation instead")
+    gen.add_argument("--inflate", default=None, metavar="SPEC",
+                     help="aesthetics: per-component tube scale (1 = the "
+                          "--tube diameter): 'c2:1.4' gives component 2 a "
+                          "fatter rope that pushes the others aside — a "
+                          "hierarchy of strands. Viewer, STL and JSON carry "
+                          "the per-component tube sizes")
+    gen.add_argument("--keep-diagram", type=float, default=0.0, metavar="W",
+                     help="aesthetics: hold each strand's xy position near "
+                          "where it started (0 = off, 1 = firm — about halves "
+                          "the drift, at a real tube cost): keeps the "
+                          "drawn presentation instead of letting the relax "
+                          "drift toward the generic tight layout; z and "
+                          "roundness still adapt")
     gen.add_argument("--relax-hops", type=int, default=0, metavar="N",
                      help="sono: basin hopping — when stuck, restart from the "
                           "best state with a random whole-arc kick (under half "
@@ -349,6 +374,32 @@ def _resolve_out(path_str: str) -> "Path":
     return p
 
 
+def parse_component_spec(spec, n_components: int, default: float) -> list[float]:
+    """Per-component numbers from a CLI spec: '2' (all), '2,1,0.5' (by
+    component order) or 'c1:2,c3:0.5' (named; others default)."""
+    if spec is None:
+        return [default] * n_components
+    text = str(spec).strip()
+    out = [default] * n_components
+    if ":" in text:
+        for part in text.split(","):
+            if not part.strip():
+                continue
+            name, _, val = part.partition(":")
+            i = int(name.strip().lstrip("cC")) - 1
+            if not 0 <= i < n_components:
+                raise ValueError(f"component c{i + 1} does not exist "
+                                 f"({n_components} components)")
+            out[i] = float(val)
+        return out
+    vals = [float(v) for v in text.split(",") if v.strip()]
+    if len(vals) == 1:
+        return [vals[0]] * n_components
+    if len(vals) != n_components:
+        raise ValueError(f"expected {n_components} values, got {len(vals)}")
+    return vals
+
+
 class _snapshot_writer:
     """relax snapshot callback: a PNG per snapshot plus a trace.json."""
 
@@ -487,6 +538,11 @@ def cmd_gen(args: argparse.Namespace) -> int:
         braid_split=args.braid_split,
         wall=args.wall,
     )
+    if args.up != "z":
+        from knotgen.transforms import reoriented
+
+        knot = reoriented(knot, args.up)
+
     anneal_from = None
     style_depth = args.depth
     if args.relax_anneal:
@@ -531,6 +587,7 @@ def cmd_gen(args: argparse.Namespace) -> int:
                               tightness=args.tightness)
         rope_budget = sum(c.total_length() for c in as_link(natural).components)
 
+        n_comp_relax = as_link(styled).n_components
         snapshot_cb = None
         if args.relax_snapshots:
             snapshot_cb = _snapshot_writer(args.relax_snapshots, styled.name,
@@ -551,10 +608,13 @@ def cmd_gen(args: argparse.Namespace) -> int:
             polish_floor=1.0 - min(max(args.polish_budget, 0.0), 30.0) / 100.0,
             anneal_from=anneal_from,
             rope_budget=rope_budget,
-            rope_slack=args.rope_slack,
+            rope_slack=parse_component_spec(args.rope_slack, n_comp_relax, 0.10),
             snapshot=snapshot_cb,
             snapshot_every=args.snapshot_every,
             hops=args.relax_hops,
+            stiffness=parse_component_spec(args.stiffness, n_comp_relax, 1.0),
+            inflate=parse_component_spec(args.inflate, n_comp_relax, 1.0),
+            keep_diagram=args.keep_diagram,
         )
         if snapshot_cb is not None:
             snapshot_cb.finish()

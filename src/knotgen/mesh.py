@@ -54,18 +54,23 @@ def design_mesh(
     sides: int = 24,
     max_rows: int = 3000,
     detail: float = 1.0,
+    scales=None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Tube mesh for a whole design (all link components merged).
 
     detail scales resolution both around and along the tube (2 = twice the
-    segments each way, ~4x the triangles); clamped to [0.25, 4]."""
+    segments each way, ~4x the triangles); clamped to [0.25, 4].
+    scales: per-component tube scale (from --inflate); default all 1."""
     detail = float(np.clip(detail, 0.25, 4.0))
     sides = int(np.clip(round(sides * detail), 8, 96))
     link = as_link(knot)
-    radius = tube_diameter / 2.0
+    if scales is None:
+        scales = (getattr(knot, "meta", {}) or {}).get("relaxed", {}).get("inflate")
+    scales = list(scales) if scales else [1.0] * link.n_components
     all_verts, all_faces = [], []
     offset = 0
-    for comp in link.components:
+    for ci, comp in enumerate(link.components):
+        radius = tube_diameter * float(scales[ci] if ci < len(scales) else 1.0) / 2.0
         rows = int(np.clip(comp.total_length() / (0.5 * radius / detail),
                            64, max_rows * detail))
         _, pts = comp.sample_arclength(rows)

@@ -54,6 +54,8 @@ FAIR_GAIN = 0.12  # gentle always-on curve-shortening (wobble hygiene)
 INFLATE = 1.03  # working tube growth per clean iteration
 ROPE_GRANT = 1.02  # rope allowance growth when stuck (up to the budget)
 SHRINK_STEP = 0.3  # Laplacian step used by the length projection
+KEEP_GAIN = 1.5  # keep_diagram spring per unit weight: 1 = firm (~halves xy drift, costs tube)
+STIFF_GAIN = 0.05  # elastica flow per unit of (stiffness - 1), as a fraction of the strand gap
 PRESSURE = 1.25  # overlaps are resolved against a radius this much above the
 #                  working one: the rope cap makes high pressure safe (it can
 #                  only move rope, never make it), and low pressure stalls
@@ -95,8 +97,29 @@ def relax_fixed_rope(
     snapshot_every: int = 5,
     hops: int = 0,
     seed: int = 0,
+    stiffness=None,
+    inflate=None,
+    keep_diagram: float = 0.0,
 ) -> tuple[FourierKnot | FourierLink, dict]:
     """Return (relaxed design, info). See the module docstring.
+
+    Aesthetics (all per component, lists in component order):
+      rope_slack may be a list — a component on a tight rope budget stays a
+        clean ring while the others do the deforming. Per-component budgets
+        are SOFT (a few percent): at a fixed footprint a strand can only
+        shed length by changing shape, and the width re-normalisation
+        partly undoes each shrink — on a fully symmetric link they cannot
+        differentiate at all; stiffness and inflate are the strong
+        per-component levers. The total budget is what's firm;
+      stiffness: resistance to bending (1 = default): a stiff component
+        follows an elastica flow — curvature flow at fixed length — so it
+        rounds toward the circle of its own length and responds less to
+        pushes; the others move around it;
+      inflate: tube scale per component (1 = the base tube): a fatter rope
+        demands more clearance from its neighbours and pushes them aside;
+      keep_diagram: a spring (0 = off, 1 = firm) holding each strand's xy
+        near where it started, so the drawn presentation survives while z
+        and roundness adapt.
 
     rope_budget: the most rope the design may use (mm); default = its
     current length. rope_slack: extra fraction on top of the budget, for
@@ -135,15 +158,26 @@ def relax_fixed_rope(
     def total_length(cs) -> float:
         return sum(c.total_length() for c in cs)
 
-    length0 = total_length(comps)
-    # the rope budget is the input length plus slack (rounding crushed kinks
-    # needs a little); rope_budget, when given, only ever CAPS it — a
-    # crushed ideal knot's natural length is far more rope than its flat
-    # self should be allowed, and surplus rope is exactly what wiggles are
-    rope_max = length0 * (1.0 + rope_slack)
+    n_c = len(comps)
+    slack = list(rope_slack) if isinstance(rope_slack, (list, tuple)) else [float(rope_slack)] * n_c
+    stiff = [float(v) for v in (stiffness or [1.0] * n_c)]
+    infl = [float(v) for v in (inflate or [1.0] * n_c)]
+    lengths0 = [c.total_length() for c in comps]
+    length0 = sum(lengths0)
+    # rope budgets are per component: the input length plus slack (rounding
+    # crushed kinks needs a little); rope_budget, when given, only ever CAPS
+    # the total — a crushed ideal knot's natural length is far more rope
+    # than its flat self should be allowed, and surplus rope is wiggle
+    rope_max_c = [L * (1.0 + sl) for L, sl in zip(lengths0, slack)]
     if rope_budget is not None:
-        rope_max = min(rope_max, max(rope_budget, length0))
-    rope_allow = length0  # grows toward rope_max only when stuck
+        cap_total = max(rope_budget, length0)
+        if sum(rope_max_c) > cap_total:
+            f = cap_total / sum(rope_max_c)
+            rope_max_c = [max(L, r * f) for L, r in zip(lengths0, rope_max_c)]
+    rope_max = sum(rope_max_c)
+    rope_allow_c = list(lengths0)  # grow toward rope_max_c only when stuck
+    rope_allow = sum(rope_allow_c)
+    orig_comps = list(comps)  # for keep_diagram
 
     def measure(cs):
         cand = FourierLink(components=list(cs), name=link.name, meta=link.meta)
@@ -176,21 +210,42 @@ def relax_fixed_rope(
     rng = np.random.default_rng(seed)
     hops_done = 0
 
-    def perturb(cs, amplitude: float):
-        out = []
-        for c in cs:
-            a, b = c.a.copy(), c.b.copy()
-            for j in range(1, min(4, a.shape[1])):
-                scale = amplitude / j  # low harmonics only: whole-arc moves
-                a[:, j] += rng.normal(0.0, scale, 3)
-                b[:, j] += rng.normal(0.0, scale, 3)
-            k = FourierKnot(a=a, b=b, name=c.name, meta=c.meta)
-            if sym > 1:
-                k = _symmetry_projection(k, sym)
-            out.append(k)
-        w = FourierLink(components=out, name=link.name, meta=link.meta)
-        sc = width0 / w.extents()["xy_diameter"]
-        return w.scaled(sc, sc, sc).components
+    from knotgen.geometry import linking_numbers
+
+    linking0 = linking_numbers(link) if len(link.components) > 1 else None
+
+    def perturb(cs, max_disp: float):
+        """Random whole-arc kick whose largest POINT displacement is capped
+        at max_disp (coefficient noise summed over harmonics and axes moves
+        a point far more than any single coefficient — capping the
+        coefficients was the bug that let one strand pull through
+        another). Retries with a softer kick if the linking numbers change
+        anyway, and gives up on the hop rather than break topology."""
+        t = np.linspace(0.0, 2.0 * np.pi, 512, endpoint=False)
+        for _attempt in range(6):
+            out = []
+            for c in cs:
+                a, b = c.a.copy(), c.b.copy()
+                for j in range(1, min(4, a.shape[1])):
+                    a[:, j] += rng.normal(0.0, 1.0 / j, 3)
+                    b[:, j] += rng.normal(0.0, 1.0 / j, 3)
+                k = FourierKnot(a=a, b=b, name=c.name, meta=c.meta)
+                if sym > 1:
+                    k = _symmetry_projection(k, sym)
+                disp = np.linalg.norm(k.eval(t) - c.eval(t), axis=1).max()
+                if disp > 1e-12:
+                    f = max_disp / disp
+                    k = FourierKnot(a=c.a + (k.a - c.a) * f, b=c.b + (k.b - c.b) * f,
+                                    name=c.name, meta=c.meta)
+                out.append(k)
+            w = FourierLink(components=out, name=link.name, meta=link.meta)
+            sc = width0 / w.extents()["xy_diameter"]
+            cand = w.scaled(sc, sc, sc).components
+            if linking0 is None or linking_numbers(
+                    FourierLink(components=cand, name=link.name, meta=link.meta)) == linking0:
+                return cand
+            max_disp *= 0.5
+        return list(cs)
 
     for it in range(iterations):
         r_work = 0.5 * d_work * BEND_SAFETY * PRESSURE  # GM radius to push for
@@ -216,14 +271,20 @@ def relax_fixed_rope(
             gap_idx = np.minimum(gap_idx, n_arr - gap_idx)
             keep = ~(same & (gap_idx <= 2))
             i, jj = i[keep], jj[keep]
+            infl_pt = np.array(infl)[comp_id]
+            stiff_pt = np.array(stiff)[comp_id]
             for x, y in ((i, jj), (jj, i)):
                 r_tp, u = tangent_point_radii(P, T, x, y)
-                viol = r_tp < r_work
+                # a fatter component demands more room: mean of the pair's scales
+                r_req = r_work * 0.5 * (infl_pt[x] + infl_pt[y])
+                viol = r_tp < r_req
                 n_viol += int(viol.sum())
                 if viol.any():
-                    f = (GM_GAIN * (r_work - r_tp[viol]))[:, None] * u[viol]
-                    np.add.at(F_gm, y[viol], f)
-                    np.add.at(F_gm, x[viol], -f)
+                    f = (GM_GAIN * (r_req[viol] - r_tp[viol]))[:, None] * u[viol]
+                    # stiff components respond less to pushes (the partner
+                    # still gets its full push, so the pair still separates)
+                    np.add.at(F_gm, y[viol], f / np.minimum(stiff_pt[y[viol]], 3.0)[:, None])
+                    np.add.at(F_gm, x[viol], -f / np.minimum(stiff_pt[x[viol]], 3.0)[:, None])
 
         # 2. depth budget (soft) and gentle fairing (unsmoothed, so it can
         #    act at wiggle wavelengths)
@@ -239,9 +300,23 @@ def relax_fixed_rope(
             n_i = per_comp[ci]
             ds = comps[ci].total_length() / n_i
             block = slice(off, off + n_i)
+            lap = _laplacian(P[block])
             F[block] = (_smooth_circular(F_gm[block], max((0.75 * r_work) / ds, 1.5))
                         + F_other[block]
-                        + FAIR_GAIN * _laplacian(P[block]))
+                        + FAIR_GAIN * lap)
+            if stiff[ci] > 1.0:
+                # resistance to bending as an elastica flow: curvature flow
+                # strong enough to matter (normalised to the strand gap),
+                # with its shrink undone below so the strand rounds toward
+                # the circle of its own length instead of collapsing
+                lmax = float(np.linalg.norm(lap, axis=1).max())
+                if lmax > 1e-12:
+                    F[block] += (stiff[ci] - 1.0) * STIFF_GAIN * gap * lap / lmax
+            if keep_diagram > 0.0:
+                # spring toward where this fraction of the strand started (xy
+                # only): the drawn diagram survives, z and roundness adapt
+                p0 = orig_comps[ci].eval(ts[ci])
+                F[block, :2] += KEEP_GAIN * keep_diagram * (p0[:, :2] - P[block, :2])
             off += n_i
 
         # topology-safe step cap
@@ -257,10 +332,23 @@ def relax_fixed_rope(
         for ci in range(len(comps)):
             blocks.append(moved[off:off + per_comp[ci]])
             off += per_comp[ci]
-        poly_now = sum(_polyline_length(b) for b in pts_list)
-        allowed = poly_now * (rope_allow / max(total_length(comps), 1e-9))
+        # elastica length restoration for stiff components: rounding must
+        # not shrink them (scale about their own centroid, gently)
+        for ci in range(len(comps)):
+            if stiff[ci] > 1.0:
+                L_pre = _polyline_length(pts_list[ci])
+                L_now = _polyline_length(blocks[ci])
+                if L_now < L_pre * 0.998:
+                    f = min(L_pre / L_now, 1.03)
+                    cen = blocks[ci].mean(axis=0)
+                    blocks[ci] = cen + (blocks[ci] - cen) * f
         pre_shrink = [b.copy() for b in blocks]
-        blocks, shrink_steps = _shorten_to(blocks, allowed)
+        shrink_steps = 0
+        for ci in range(len(comps)):
+            allowed_i = _polyline_length(pts_list[ci]) * (
+                rope_allow_c[ci] / max(comps[ci].total_length(), 1e-9))
+            [blocks[ci]], st = _shorten_to([blocks[ci]], allowed_i)
+            shrink_steps = max(shrink_steps, st)
         # the shrink is a topology-unaware flow: cap its displacement like
         # the forces (a quarter of the current strand gap) so it can never
         # drag a strand through another; any leftover length is spent on
@@ -290,6 +378,31 @@ def relax_fixed_rope(
             if z > max_depth:
                 comps = check.scaled(1.0, 1.0, max_depth / z).components
 
+        # the footprint rescale above can re-inflate length after the
+        # projection (a shrinking xy diameter scales everything back up),
+        # which crept a zero-slack component up 9% over 60 iterations — so
+        # re-project any component now over its allowance, once, in the
+        # final frame of this iteration
+        over = [ci for ci in range(len(comps))
+                if comps[ci].total_length() > rope_allow_c[ci] * 1.003]
+        if over:
+            fixed = list(comps)
+            for ci in over:
+                _, pts_i = comps[ci].sample_arclength(per_comp[ci])
+                allowed_i = _polyline_length(pts_i) * (
+                    rope_allow_c[ci] / comps[ci].total_length())
+                [blk], _ = _shorten_to([pts_i], allowed_i)
+                k = FourierKnot.from_samples(
+                    blk, n_harmonics=min(harmonics[ci], per_comp[ci] // 2 - 1),
+                    name=comps[ci].name, meta=comps[ci].meta)
+                if sym > 1:
+                    k = _symmetry_projection(k, sym)
+                fixed[ci] = k
+            comps = fixed
+            w = FourierLink(components=comps, name=link.name, meta=link.meta)
+            s2 = width0 / w.extents()["xy_diameter"]
+            comps = w.scaled(s2, s2, s2).components
+
         # 4. measure, inflate or grant rope, track the best
         score, gap, bend, est = measure(comps)
         key = (round(min(score, 1.0), 4), round(est, 2))
@@ -304,7 +417,8 @@ def relax_fixed_rope(
         # rope grants are cheap and gradual: decide them on a shorter clock
         if (stuck >= max(8, patience // 2) and hops_done >= hops
                 and rope_allow < rope_max * 0.999):
-            rope_allow = min(rope_allow * ROPE_GRANT, rope_max)
+            rope_allow_c = [min(r * ROPE_GRANT, m) for r, m in zip(rope_allow_c, rope_max_c)]
+            rope_allow = sum(rope_allow_c)
             grants += 1
             stuck = 0
             phase = "grant-rope"
@@ -315,7 +429,7 @@ def relax_fixed_rope(
                 # best state (under half the gap, so no strand can cross
                 # another in the kick) is a bigger move than +2% rope
                 hops_done += 1
-                comps = perturb(best["comps"], 0.35 * best["gap"])
+                comps = perturb(best["comps"], 0.4 * best["gap"])
                 score, gap, bend, est = measure(comps)
                 d_work = est
                 stuck = 0
@@ -324,7 +438,8 @@ def relax_fixed_rope(
                     print(f"    hop {hops_done}/{hops}: kicked the best state "
                           f"(fits \u2300{best['est']:.1f}) to \u2300{est:.1f}")
             elif rope_allow < rope_max * 0.999:
-                rope_allow = min(rope_allow * ROPE_GRANT, rope_max)
+                rope_allow_c = [min(r * ROPE_GRANT, m) for r, m in zip(rope_allow_c, rope_max_c)]
+                rope_allow = sum(rope_allow_c)
                 grants += 1
                 stuck = 0
                 phase = "grant-rope"
@@ -357,15 +472,24 @@ def relax_fixed_rope(
               f"fits ⌀{polish_info['est_before']} -> "
               f"⌀{polish_info['est_after']}")
 
+    topology_ok = True
+    if linking0 is not None:
+        topology_ok = linking_numbers(
+            FourierLink(components=result_comps, name=link.name, meta=link.meta)) == linking0
+        if not topology_ok and verbose:
+            print("    ! linking numbers changed during relax — a strand passed "
+                  "through another; discard this result")
     result = FourierLink(components=result_comps, name=link.name, meta=dict(link.meta))
     result.meta["relaxed"] = {
         "tube": tube, "iterations": done_at, "method": "sono",
+        "topology_ok": topology_ok,
         "gap_before": round(float(gap0), 2), "gap_after": round(float(gap1), 2),
         "bend_before": round(float(bend0), 2), "bend_after": round(float(bend1), 2),
         "length_before": round(length0, 1),
         "length_after": round(total_length(result_comps), 1),
         "rope_budget": round(rope_max, 1), "rope_grants": grants,
         "hops": hops_done,
+        "stiffness": stiff, "inflate": infl, "keep_diagram": keep_diagram,
         "converged": bool(gap1 >= 0.99 * target_gap and bend1 >= 0.99 * target_bend),
         "max_tube_est": round(min(2.0 * bend1 / 1.1, gap1 / 1.05), 1),
         "polish": polish_info,

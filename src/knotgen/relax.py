@@ -181,7 +181,14 @@ def spectral_polish(
                     name=link.name, meta=link.meta)
         est = est_of(cand)
         ceiling = max(ceiling, est)
-        if est >= floor * ceiling:
+        # a pass may not move any point more than a quarter of the strand
+        # gap: the filter is topology-unaware, and a large jump could cross
+        # a strand between one accepted state and the next
+        tt = np.linspace(0.0, TAU, 512, endpoint=False)
+        jump = max(float(np.linalg.norm(cn.eval(tt) - ca.eval(tt), axis=1).max())
+                   for cn, ca in zip(cand.components, accepted.components))
+        gap_now, _, _ = min_clearance(accepted)
+        if est >= floor * ceiling and jump <= 0.25 * gap_now:
             accepted, passes = cand, passes + 1
         else:
             break
@@ -215,6 +222,9 @@ def relax(
     snapshot=None,
     snapshot_every: int = 5,
     hops: int = 0,
+    stiffness=None,
+    inflate=None,
+    keep_diagram: float = 0.0,
 ) -> tuple[FourierKnot | FourierLink, dict]:
     """Return (relaxed design, info). Sizes in mm; run AFTER apply_style.
 
@@ -247,7 +257,10 @@ def relax(
             push=push, verbose=verbose, rope_budget=rope_budget,
             rope_slack=rope_slack, polish_floor=polish_floor,
             snapshot=snapshot, snapshot_every=snapshot_every, hops=hops,
+            stiffness=stiffness, inflate=inflate, keep_diagram=keep_diagram,
         )
+    if isinstance(rope_slack, (list, tuple)):
+        rope_slack = float(rope_slack[0])  # the older methods are global
     from knotgen.geometry import max_curvature, min_clearance
 
     single = isinstance(design, FourierKnot)

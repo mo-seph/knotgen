@@ -93,6 +93,10 @@ def _styled_from_args(args, snapshot=None, snapshot_every=5):
         )
     except KeyError as exc:
         raise ValueError(str(exc.args[0]) if exc.args else str(exc)) from None
+    if args.up != "z":
+        from knotgen.transforms import reoriented
+
+        knot = reoriented(knot, args.up)
     anneal_from = None
     style_depth = args.depth
     if args.relax_anneal and args.relax and args.depth and args.relax_method != "sono":
@@ -118,17 +122,24 @@ def _styled_from_args(args, snapshot=None, snapshot_every=5):
             max_depth = args.depth
         from knotgen.link import as_link as _al
 
+        from knotgen.cli import parse_component_spec
+
         natural = apply_style(knot, width=args.width, breadth=args.breadth,
                               tightness=args.tightness)
         rope_budget = sum(c.total_length() for c in _al(natural).components)
+        n_comp = _al(styled).n_components
         styled, relax_info = relax(
             styled, tube=args.tube, iterations=args.relax_iterations,
             max_depth=max_depth, push=args.relax_max, verbose=False,
             method=args.relax_method,
             polish_floor=1.0 - min(max(args.polish_budget, 0.0), 30.0) / 100.0,
             anneal_from=anneal_from, rope_budget=rope_budget,
-            rope_slack=args.rope_slack, snapshot=snapshot,
-            snapshot_every=snapshot_every, hops=args.relax_hops,
+            rope_slack=parse_component_spec(args.rope_slack, n_comp, 0.10),
+            snapshot=snapshot, snapshot_every=snapshot_every,
+            hops=args.relax_hops,
+            stiffness=parse_component_spec(args.stiffness, n_comp, 1.0),
+            inflate=parse_component_spec(args.inflate, n_comp, 1.0),
+            keep_diagram=args.keep_diagram,
         )
         relax_info = {k: (float(v) if hasattr(v, "item") or isinstance(v, float) else v)
                       for k, v in relax_info.items()}
@@ -353,6 +364,10 @@ def _generate_response(payload, args, knot, styled, relax_info, polish_info) -> 
         "strips": strips,
         "strip_metrics": strip_metrics,
         "tube_mm": args.tube,
+        "tube_scales": ((relax_info or {}).get("inflate")
+                        if relax_info and any(abs(float(v) - 1.0) > 1e-9
+                                              for v in relax_info.get("inflate", [1.0]))
+                        else None),
         "report": {
             "summary": report.summary(),
             "ok_for_tube": (None if args.tube is None else bool(report.ok_for_tube)),

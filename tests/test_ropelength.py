@@ -135,3 +135,89 @@ def test_gui_timeline_gif_and_keep_state():
     chosen = api_use_snapshot({"job": job, "index": 1})
     assert chosen["name"] == "3_1"
     assert chosen["relax"]["snapshot_iteration"] == snaps[1]["iteration"]
+
+
+def _curv_spread(comp):
+    import numpy as np
+
+    t = np.linspace(0, 2 * np.pi, 1024, endpoint=False)
+    k = comp.curvature(t)
+    return float(np.std(k) / max(np.mean(k), 1e-12))
+
+
+def test_stiff_component_rounds_toward_a_circle():
+    k = apply_style(resolve("W(3,3)"), width=250, depth=25)
+    base, _ = relax(k, tube=14, method="sono", iterations=40)
+    stiff, info = relax(k, tube=14, method="sono", iterations=40,
+                        stiffness=[5.0, 1.0, 1.0])
+    assert info["stiffness"] == [5.0, 1.0, 1.0]
+    # component 1 ends up with more uniform curvature (rounder) when stiff
+    assert _curv_spread(as_link(stiff).components[0]) < _curv_spread(as_link(base).components[0])
+
+
+def test_inflated_component_gets_more_room_and_is_exported_fatter(tmp_path):
+    from knotgen.gm import tangent_point_radii  # noqa: F401  (module import check)
+    from knotgen.mesh import design_mesh
+
+    k = apply_style(resolve("W(3,3)"), width=250, depth=25)
+    out, info = relax(k, tube=14, method="sono", iterations=40,
+                      inflate=[1.0, 1.5, 1.0])
+    assert info["inflate"] == [1.0, 1.5, 1.0]
+    # the mesh picks the scales up from the relaxed meta: component 2's
+    # tube is fatter, so its vertex ring is further from its centreline
+    import numpy as np
+
+    v, f = design_mesh(out, tube_diameter=14)
+    v1, f1 = design_mesh(out, tube_diameter=14, scales=[1.0, 1.0, 1.0])
+    # the inflated mesh occupies more space (fatter component 2)
+    assert np.ptp(v, axis=0).prod() > np.ptp(v1, axis=0).prod()
+    # and the JSON records it
+    from knotgen.checks import preflight
+    from knotgen.export import build_document
+
+    doc = build_document(out, report=preflight(out, tube_diameter=14),
+                         fit_points=30, tube_diameter=14)
+    assert doc["pipe_preview"]["component_scales"] == [1.0, 1.5, 1.0]
+
+
+def test_keep_diagram_limits_xy_drift():
+    import numpy as np
+
+    k = apply_style(resolve("L10n60"), width=180, depth=40)
+    t = np.linspace(0, 2 * np.pi, 512, endpoint=False)
+
+    def drift(out):
+        return max(float(np.linalg.norm(c1.eval(t)[:, :2] - c0.eval(t)[:, :2], axis=1).mean())
+                   for c0, c1 in zip(as_link(k).components, as_link(out).components))
+
+    free, _ = relax(k, tube=15, max_depth=40, method="sono", iterations=40)
+    held, info = relax(k, tube=15, max_depth=40, method="sono", iterations=40,
+                       keep_diagram=1.0)
+    assert info["keep_diagram"] == 1.0
+    assert drift(held) < drift(free)
+
+
+def test_per_component_rope_slack_is_respected():
+    k = apply_style(resolve("W(3,3)"), width=250, depth=25)
+    L0 = [c.total_length() for c in as_link(k).components]
+    out, _ = relax(k, tube=14, method="sono", iterations=60,
+                   rope_slack=[0.0, 0.3, 0.0])
+    L1 = [c.total_length() for c in as_link(out).components]
+    growth = [b / a - 1.0 for a, b in zip(L0, L1)]
+    # per-component budgets are SOFT at a fixed footprint: the width
+    # re-normalisation inflates every component uniformly, so on a fully
+    # symmetric link (all three set the footprint) they cannot
+    # differentiate at all — the guarantee is only that tight components
+    # stay within a few percent and the total stays within budget
+    assert growth[0] < 0.07 and growth[2] < 0.07
+    assert sum(L1) <= sum(L0) * (1.0 + 0.3 / 3) * 1.01
+
+
+def test_hops_preserve_linking_numbers():
+    from knotgen.geometry import linking_numbers
+
+    k = apply_style(resolve("L11a508"), width=270, depth=70)
+    out, info = relax(k, tube=20, max_depth=70, method="sono", iterations=120,
+                      rope_slack=0.15, hops=2)
+    assert info["topology_ok"] is True
+    assert linking_numbers(out) == linking_numbers(k)

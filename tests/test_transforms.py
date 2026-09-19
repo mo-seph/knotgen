@@ -73,3 +73,30 @@ def test_crossing_count_trefoil():
 def test_crossing_count_pentafoil(pentafoil):
     k = apply_style(pentafoil, width=300.0, depth=25.0)
     assert len(crossings_xy(k)) == 5
+
+
+
+def test_reoriented_maps_chosen_axis_to_z():
+    import numpy as np
+
+    from knotgen.registry import resolve
+    from knotgen.transforms import reoriented
+
+    k = resolve("4_1")
+    e0 = k.extents()
+    ky = reoriented(k, "y")
+    ey = ky.extents()
+    assert ey["z_extent"] == pytest.approx(e0["y_extent"], rel=1e-6)
+    assert ey["y_extent"] == pytest.approx(e0["z_extent"], rel=1e-6)
+    # proper rotation: the curve length is unchanged and z is the identity
+    assert ky.total_length() == pytest.approx(k.total_length(), rel=1e-9)
+    assert reoriented(k, "z") is k
+    with pytest.raises(ValueError):
+        reoriented(k, "w")
+
+
+def test_cli_up_flag(capsys):
+    from knotgen.cli import main
+
+    main(["4_1", "--width", "200", "--up", "y"])
+    assert "4_1" in capsys.readouterr().out

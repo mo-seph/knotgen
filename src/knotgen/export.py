@@ -267,6 +267,9 @@ def build_document(
         doc["fourier"]["b"] = link.components[0].b.tolist()
     if tube_diameter is not None:
         doc["pipe_preview"] = {"diameter_mm": tube_diameter}
+        scales = ((getattr(design, "meta", {}) or {}).get("relaxed") or {}).get("inflate")
+        if scales and any(abs(float(v) - 1.0) > 1e-9 for v in scales):
+            doc["pipe_preview"]["component_scales"] = [float(v) for v in scales]
         doc["checks"]["tube_diameter_mm"] = tube_diameter
         doc["checks"]["ok_for_tube"] = bool(report.ok_for_tube)
     if strips:

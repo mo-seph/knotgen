@@ -128,3 +128,37 @@ def apply_style(
         out.meta = link.meta
         return out
     return link
+
+
+_UP_ROTATIONS = {
+    "z": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+    "-z": [[1, 0, 0], [0, -1, 0], [0, 0, -1]],
+    "y": [[1, 0, 0], [0, 0, -1], [0, 1, 0]],
+    "-y": [[1, 0, 0], [0, 0, 1], [0, -1, 0]],
+    "x": [[0, 0, -1], [0, 1, 0], [1, 0, 0]],
+    "-x": [[0, 0, 1], [0, 1, 0], [-1, 0, 0]],
+}
+
+
+def reoriented(knot, up: str = "z"):
+    """Rotate the design so the chosen source axis becomes +z (the depth
+    direction). Proper rotations only, so handedness — the knot type — is
+    untouched. Apply BEFORE styling: some symmetric embeddings look far
+    better squashed along y than along z."""
+    from dataclasses import replace
+
+    import numpy as np
+
+    from knotgen.link import FourierLink, as_link
+
+    up = str(up).lower().strip()
+    if up not in _UP_ROTATIONS:
+        raise ValueError(f"--up must be one of {', '.join(_UP_ROTATIONS)}")
+    if up == "z":
+        return knot
+    R = np.array(_UP_ROTATIONS[up], dtype=float)
+    link = as_link(knot)
+    comps = [replace(c, a=R @ c.a, b=R @ c.b) for c in link.components]
+    if len(comps) == 1 and not isinstance(knot, FourierLink):
+        return comps[0]
+    return FourierLink(components=comps, name=link.name, meta=dict(link.meta))

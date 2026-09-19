@@ -190,6 +190,31 @@ def crossings_xy(
     return crossings
 
 
+def linking_numbers(
+    knot: FourierKnot | FourierLink, samples: int = 2048
+) -> dict[tuple[int, int], float]:
+    """Pairwise linking numbers between components (a topological
+    invariant: half the sum of signed cross-component crossings). A relax
+    that changes any of these has pulled one strand through another."""
+    link = as_link(knot)
+    pts, comp_id, idx, counts, _ = _sampled_components(link, samples)
+    offsets = np.cumsum([0] + counts[:-1])
+    nxt = np.empty(len(pts), dtype=int)
+    for ci, n in enumerate(counts):
+        o = offsets[ci]
+        nxt[o:o + n] = o + (np.arange(n) + 1) % n
+    lk: dict[tuple[int, int], float] = {}
+    for c in crossings_xy(knot, samples):
+        if c.comp_over == c.comp_under:
+            continue
+        d_over = pts[nxt[c.seg_over]][:2] - pts[c.seg_over][:2]
+        d_under = pts[nxt[c.seg_under]][:2] - pts[c.seg_under][:2]
+        sign = 1.0 if (d_over[0] * d_under[1] - d_over[1] * d_under[0]) > 0 else -1.0
+        key = (min(c.comp_over, c.comp_under), max(c.comp_over, c.comp_under))
+        lk[key] = lk.get(key, 0.0) + sign
+    return {k: v / 2.0 for k, v in sorted(lk.items())}
+
+
 def passage_sequence(
     knot: FourierKnot | FourierLink, samples: int = 2048
 ) -> dict[int, list[tuple[float, bool]]]:

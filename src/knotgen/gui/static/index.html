@@ -126,6 +126,8 @@
       <div class="row"><label for="width">width ⌀ mm</label><input id="width" type="number" value="300" step="10"/></div>
       <div class="row"><label for="breadth">breadth mm <span class="hint">(blank = round)</span></label><input id="breadth" type="number" step="10" placeholder="auto"/></div>
       <div class="row"><label for="depth">depth mm <span class="hint">(blank = auto)</span></label><input id="depth" type="number" step="5" placeholder="auto"/></div>
+      <div class="row"><label for="upaxis" title="which source axis becomes 'up' (the depth direction) before styling">up axis</label>
+        <select id="upaxis"><option>z</option><option>-z</option><option>y</option><option>-y</option><option>x</option><option>-x</option></select></div>
       <div class="row"><label for="tightness">tightness <span id="tightval">0</span></label>
         <input id="tightness" type="range" min="-1" max="1" step="0.05" value="0"/></div>
       <div class="row"><label for="polish" title="adaptive smoothing: damps wobble as far as clearance allows (relax does this automatically)">polish (smooth wobble)</label><input id="polish" type="checkbox"/></div>
@@ -157,7 +159,10 @@
       <div class="row"><label for="squeezeto" title="after relax/polish: scale z down to this depth and re-polish (fit gently, squash a little)">squeeze to mm</label><input id="squeezeto" type="number" step="5" placeholder="off"/></div>
       <div class="row"><label for="relaxmethod">method</label>
         <select id="relaxmethod" title="sono = fixed rope (inflate the tube, never the rope); gm/forces = earlier dynamics"><option>sono</option><option>gm</option><option>forces</option></select></div>
-      <div class="row"><label for="ropeslack" title="sono: extra rope beyond the design's length the relax may use (fraction). A little rounds crushed kinks; a lot becomes wiggle">rope slack</label><input id="ropeslack" type="number" value="0.10" step="0.05" min="0" max="1"/></div>
+      <div class="row"><label for="ropeslack" title="sono: extra rope beyond the design's length the relax may use (fraction). A little rounds crushed kinks; a lot becomes wiggle. Per component: 0.05,0.3 or c2:0.3">rope slack</label><input id="ropeslack" type="text" value="0.10"/></div>
+      <div class="row"><label for="stiffness" title="per-component resistance to bending (1 = default): c1:4 rounds component 1 toward a circle; c3:0.3 makes it floppy">stiffness</label><input id="stiffness" type="text" placeholder="c1:4,c2:1"/></div>
+      <div class="row"><label for="inflate" title="per-component tube scale (1 = the tube diameter): c2:1.4 gives component 2 a fatter rope that pushes the others aside">inflate</label><input id="inflate" type="text" placeholder="c2:1.4"/></div>
+      <div class="row"><label for="keepdiagram" title="hold each strand's xy position near where it started (0 = off, 1 = firm) — keeps the drawn presentation">keep diagram</label><input id="keepdiagram" type="number" value="0" step="0.1" min="0" max="2"/></div>
       <div class="row"><label for="relaxhops" title="basin hopping: when stuck, restart from the best state with a random whole-arc kick, up to N times (escapes local minima; pair with push hard)">basin hops</label><input id="relaxhops" type="number" value="0" step="1" min="0" max="20"/></div>
       <div class="row"><label for="relaxmax">push hard (--relax-max)</label><input id="relaxmax" type="checkbox"/></div>
       <div class="hint">relax needs a tube diameter and can take a while; it holds
@@ -292,7 +297,8 @@ function buildScene(data) {
   const radius = (data.tube_mm ? data.tube_mm : data.strips ? 5 : 12) / 2;
   data.components.forEach((pts, ci) => {
     const curve = new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(...p)), true);
-    const geo = new THREE.TubeGeometry(curve, Math.min(800, pts.length * 2), radius, 20, true);
+    const rScale = (data.tube_scales && data.tube_scales[ci]) || 1;
+    const geo = new THREE.TubeGeometry(curve, Math.min(800, pts.length * 2), radius * rScale, 20, true);
     const mat = new THREE.MeshStandardMaterial({
       color: COLORS[ci % COLORS.length], roughness: 0.45, metalness: 0.15 });
     const mesh = new THREE.Mesh(geo, mat);
@@ -376,6 +382,7 @@ function buildArgv() {
   add('--width', 'width', 300);
   if (num('breadth') !== null) a.push('--breadth', num('breadth'));
   if (num('depth') !== null) a.push('--depth', num('depth'));
+  if ($('upaxis').value !== 'z') a.push('--up', $('upaxis').value);
   add('--tightness', 'tightness', 0);
   if ($('polish').checked) a.push('--polish');
   add('--polish-budget', 'polishbudget', 0.5);
@@ -397,7 +404,11 @@ function buildArgv() {
     add('--relax-iterations', 'relaxiter', 150);
     if (num('relaxmaxdepth') !== null) a.push('--relax-max-depth', num('relaxmaxdepth'));
     if ($('relaxmethod').value !== 'sono') a.push('--relax-method', $('relaxmethod').value);
-    add('--rope-slack', 'ropeslack', 0.1);
+    const slack = $('ropeslack').value.trim();
+    if (slack && Number(slack) !== 0.1) a.push('--rope-slack', slack);
+    if ($('stiffness').value.trim()) a.push('--stiffness', $('stiffness').value.trim());
+    if ($('inflate').value.trim()) a.push('--inflate', $('inflate').value.trim());
+    add('--keep-diagram', 'keepdiagram', 0);
     add('--relax-hops', 'relaxhops', 0);
     if (num('relaxanneal') !== null) a.push('--relax-anneal', num('relaxanneal'));
     if ($('relaxmax').checked) a.push('--relax-max');

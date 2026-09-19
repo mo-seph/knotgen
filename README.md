@@ -72,6 +72,7 @@ Knot names are Rolfsen (`3_1`, `5_2`, `8_19`, ...), or `"T(p,q)"` for a raw toru
 | `--width MM` | diameter of the circumscribed circle in xy (default 300). Uniform in-plane scale — n-fold symmetry stays exact |
 | `--breadth MM` | separate y extent — deliberately breaks the symmetry for oval layouts |
 | `--depth MM` | z extent = how far strands separate at crossings. Default is auto: 25 mm for flat/2.5D embeddings; the fully-3D ideal conformations (9–11 crossings, links) keep their natural proportions instead — squashing those creates jagged near-cusps (the tool warns if you force it) |
+| `--up AXIS` | which axis of the source embedding becomes "up" (the depth direction) before styling: `z` (default), `-z`, `y`, `-y`, `x`, `-x`. Some symmetric knots look far better squashed along y than along z |
 | `--tightness T` | −1..1 aesthetic dial. Negative rounds corners off (relaxed rope), positive sharpens lobes into small loops (petal look). Implemented as symmetry-preserving harmonic reweighting |
 | `--source` | `auto` (default), `fremlin`, `torus`, or `ideal` |
 | `--variant` | Fremlin embedding variant (see `knotgen list`) — different symmetrisations of the same knot |
@@ -88,9 +89,12 @@ Knot names are Rolfsen (`3_1`, `5_2`, `8_19`, ...), or `"T(p,q)"` for a raw toru
 | `--force` | write `--out` / `--mesh` even when the tube check fails (useful when it's close) — the JSON records the failing check, and a forced mesh may self-intersect |
 | `--mesh-detail F` | mesh resolution multiplier (default 1): `2` = twice the segments around and along the tube (~4× the triangles) for slicer-smooth prints, `0.5` = coarser |
 | `--polish` | adaptive smoothing without relaxing: damp high-frequency wobble exactly as far as the clearance budget allows (`--relax` runs this automatically as its final step) |
-| `--rope-slack F` | sono: extra rope beyond the design's length the relax may use, as a fraction (default 0.10) — a little rounds crushed kinks, a lot becomes wiggle |
+| `--rope-slack SPEC` | sono: extra rope beyond the design's length the relax may use, as a fraction (default 0.10) — a little rounds crushed kinks, a lot becomes wiggle. Per component for links (`0.05,0.3` or `c2:0.3`): a component on a tight budget stays a clean ring |
 | `--relax-snapshots DIR` / `--snapshot-every N` | write a PNG of the design every N relax iterations (default 5) plus `trace.json` — watch the optimiser |
 | `--relax-gif FILE` | looping animated GIF of the relax (one frame per snapshot interval) |
+| `--stiffness SPEC` | aesthetics, per component: resistance to bending (1 = default). `c1:4` rounds component 1 toward a circle and shrugs off the pushes that grid-ify it; `c3:0.3` makes it floppy so it absorbs the deformation instead |
+| `--inflate SPEC` | aesthetics, per component: tube scale (1 = `--tube`). `c2:1.4` gives component 2 a fatter rope that pushes the others aside — a hierarchy of strands. The viewer, STL and JSON carry the per-component sizes |
+| `--keep-diagram W` | aesthetics: hold each strand's xy position near where it started (0 = off, 1 = firm — about halves the drift, at a real tube cost) — keeps the drawn presentation instead of drifting toward the generic tight layout; z and roundness still adapt |
 | `--relax-hops N` | basin hopping: when stuck, restart from the best state with a random whole-arc kick (kept under half the strand gap, so topology is safe), up to N times — escapes the local minima a purely local optimiser can't, since a passage never *slides* along to relocate a crossing by itself. Pair with `--relax-max` |
 | `--relax-anneal [F]` | depth annealing: style at F × the requested depth (default 1.4) and tighten the budget gradually during relax — the optimiser fixes small deficits with smooth low-frequency moves instead of high-frequency wiggle. The best of both from the depth-tradeoff: near-direct clearance, squash-route smoothness |
 | `--squeeze-to MM` | after relax/polish: scale z down to this depth and re-polish — "fit gently, squash a little". Sub-linear tube cost for small squashes (bend radii in vertical planes degrade quadratically, so big squashes burn margin fast) |
